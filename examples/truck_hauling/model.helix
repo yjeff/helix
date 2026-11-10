@@ -1,0 +1,34 @@
+HELIX 1
+
+PROJECT "TRUCK HAULING"
+
+NETWORK
+  CREATE(interval=ERLNG(4.0, 2.0), first=0, until=480)
+
+  J: JOIN(count=2, merge=FIRST)
+
+  LOAD: QUEUE()
+  TRKS: QUEUE()
+  LDER: QUEUE()
+
+  BEGN: SELECT(
+    queue_rule=ASM,
+    server_rule=LIT,
+    queues=[LOAD, TRKS, LDER],
+    servers=[L1, L2],
+  )
+
+  L1: ACTIVITY(duration=EXPON(14.0)) -> S
+  L2: ACTIVITY(duration=EXPON(12.0)) -> S
+
+  S: FORK(branches=[LDER -> LOADER_REST, TRKS -> HAUL])
+
+  LOADER_REST: ACTIVITY(duration=5, servers=2) -> LDER
+  HAUL: ACTIVITY(duration=RNORM(22.0, 3.0), servers=4) -> DUMP
+  DUMP: ACTIVITY(duration=UNFRM(2.0, 8.0), servers=4) -> RETURN
+  RETURN: ACTIVITY(duration=RNORM(18.0, 3.0), servers=4) -> TRKS
+
+  LOAD -> BEGN
+  TRKS -> BEGN
+  LDER -> BEGN
+END

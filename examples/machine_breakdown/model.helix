@@ -1,0 +1,21 @@
+HELIX 1
+
+PROJECT "MACHINE BREAKDOWN"
+
+RESOURCE TOOL(capacity=1)
+
+NETWORK
+  CREATE(interval=EXPON(1))
+  AWAIT(resource=TOOL)
+  ACTIVITY(duration=UNFRM(0.2, 0.5))
+  ACTIVITY(duration=RNORM(0.5, 0.1))
+  FREE(resource=TOOL)
+  TERMINATE()
+
+  ; 每 20 个时间单位发生一次故障。
+  CREATE(first=20, count=1)
+  DOWN: PREEMPT(resource=TOOL)
+  ACTIVITY(duration=ERLNG(0.75, 3))
+  FREE(resource=TOOL)
+  ACTIVITY(duration=RNORM(12.0, 2.0)) -> DOWN
+END

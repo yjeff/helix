@@ -1,0 +1,19 @@
+HELIX 1
+
+PROJECT "SERIAL WORK STATIONS"
+
+NETWORK
+  CREATE(interval=EXPON(0.4), first=0)
+
+  QUEUE(capacity=4, on_full=BALK(SUB))
+
+  ACTIVITY(duration=EXPON(0.25))
+
+  QUEUE(capacity=2, on_full=BLOCK)
+
+  ACTIVITY(duration=EXPON(0.5))
+
+  TERMINATE()
+
+  SUB: TERMINATE()
+END

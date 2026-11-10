@@ -1,0 +1,30 @@
+HELIX 1
+
+PROJECT "LIQUID LEVEL CONTROL"
+
+; 液位是连续状态，泵开关是全局离散状态。
+VAR LEVEL AS "LEVEL" RANGE 0..100
+VAR PUMP_ON AS "PUMP ON"
+
+CONTINUOUS METHOD=RK4, MIN_STEP=0.001, SAVE_STEP=0.1, MAX_STEP=0.1
+
+EQUATION
+  DD(LEVEL) = IF(PUMP_ON > 0.5, -QOUT, QIN)
+END
+
+; 安全上限：液位超高时终止仿真。
+SEVNT code=1, when=LEVEL > 95
+
+NETWORK
+  ; 高液位：启动泵，ACTIVITY 模拟 1.5 分钟启动延迟。
+  DETECT(when=LEVEL > 80, edge=RISING)
+  ACTIVITY(duration=1.5)
+  ASSIGN(PUMP_ON=1)
+  TERMINATE()
+
+  ; 低液位：停泵，ACTIVITY 模拟 1.0 分钟停止延迟。
+  DETECT(when=LEVEL > 20, edge=FALLING)
+  ACTIVITY(duration=1.0)
+  ASSIGN(PUMP_ON=0)
+  TERMINATE()
+END

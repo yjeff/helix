@@ -1,0 +1,27 @@
+HELIX 1
+
+PROJECT "CONVERTED 0604.slam"
+
+NETWORK
+  ACT2: ACTIVITY(duration=0) -> SVL1
+  ACT3: ACTIVITY(duration=0) -> SVL2
+  ACT4: ACTIVITY(duration=0) -> SVL3
+  SVL1: QUEUE() -> ACT6
+  ACT6: ACTIVITY(duration=EXPON(ATRIB_3)) -> ACT12
+  SVL2: QUEUE() -> ACT8
+  ACT8: ACTIVITY(duration=EXPON(ATRIB_3)) -> ACT12
+  SVL3: QUEUE() -> ACT10
+  ACT10: ACTIVITY(duration=EXPON(ATRIB_3)) -> ACT12
+  ACT12: ACTIVITY(duration=ATRIB_5+1) -> CRSR
+  CRSR: QUEUE() -> ACT14
+  ACT14: ACTIVITY(duration=EXPON(ATRIB_4)) -> ACT1
+  ACT1: ACTIVITY(duration=ATRIB_5) -> ACT2
+END
+
+; conversion warnings:
+;   ACT2: 无 duration 的 ACTIVITY 转为 duration=0
+;   ACT2: 忽略 ACTIVITY 条件 ATRIB(2).EQ.1
+;   ACT3: 无 duration 的 ACTIVITY 转为 duration=0
+;   ACT3: 忽略 ACTIVITY 条件 ATRIB(2).EQ.2
+;   ACT4: 无 duration 的 ACTIVITY 转为 duration=0
+;   ACT4: 忽略 ACTIVITY 条件 ATRIS(2).EQ.3

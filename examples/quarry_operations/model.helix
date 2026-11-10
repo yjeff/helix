@@ -1,0 +1,40 @@
+HELIX 1
+
+PROJECT "QUARRY OPERATIONS"
+
+; 9 个实体在 t=0 创建。id 选择装载点，tons 用于 CRSR 优先级。
+VAR id ENTITY
+VAR tons ENTITY
+VAR svltime ENTITY
+VAR crsrtime ENTITY
+VAR rettime ENTITY
+
+NETWORK
+  CREATE(count=9,
+         id=[1, 1, 2, 2, 3, 3, 1, 2, 3],
+         tons=[20, 20, 20, 20, 20, 20, 50, 50, 50],
+         svltime=[5, 5, 5, 5, 5, 5, 10, 10, 10],
+         crsrtime=[2, 2, 2, 2, 2, 2, 4, 4, 4],
+         rettime=[1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 2.0, 2.0, 2.0])
+
+  Loop: IF id = 1 -> SVL1
+  ELSE IF id = 2 -> SVL2
+  ELSE -> SVL3
+
+  SVL1: QUEUE()
+        LOAD1: ACTIVITY(duration=EXPON(svltime)) -> ENDL
+
+  SVL2: QUEUE()
+        LOAD2: ACTIVITY(duration=EXPON(svltime)) -> ENDL
+
+  SVL3: QUEUE()
+        LOAD3: ACTIVITY(duration=EXPON(svltime)) -> ENDL
+
+  ; Regular activity: no single-server bottleneck. The book allows up to
+  ; three concurrent entities; servers=9 is the model's entity count.
+  ENDL: ACTIVITY(duration=rettime, servers=9)
+
+  CRSR: QUEUE(order=HIGH(tons))
+        CRUSH: ACTIVITY(duration=EXPON(crsrtime))
+        RETURN: ACTIVITY(duration=rettime) -> Loop
+END

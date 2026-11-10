@@ -1,0 +1,20 @@
+HELIX 1
+
+PROJECT "TV INSPECTION"
+
+NETWORK
+  CREATE(interval=UNFRM(3.5, 7.5), first=0)
+
+  Q1: QUEUE()
+
+  INSPECT: ACTIVITY(duration=UNFRM(6.0, 12.0), servers=2)
+
+  CHECK: IF RANDOM() < 0.85 -> DONE
+  ELSE -> Q2
+
+  Q2: QUEUE()
+
+  ADJUST: ACTIVITY(duration=UNFRM(20.0, 40.0)) -> Q1
+
+  DONE: TERMINATE()
+END
