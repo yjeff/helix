@@ -32,7 +32,8 @@ docs/known-differences.md 已知差异与不再排查项
 docs/design.md           实现架构
 docs/data-structures.md  数据结构
 docs/metrics.md          自动统计指标命名
-docs/Helix仿真软件用户手册.docx  用户手册
+docs/Helix_User_Manual.docx  用户手册（GitHub）
+docs/Helix仿真软件用户手册.docx  中文文件名副本（GitHub）
 docs/debug.md            DEBUG/动画数据
 src/helix/               实现
 examples/                新语法案例
