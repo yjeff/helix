@@ -211,7 +211,13 @@ class Model:
 
             if node.kind == "CREATE":
                 control = {"interval", "first", "count",
-                           "priority", "until"}
+                           "priority", "until", "entity_class"}
+                entity_class = node.args.get(
+                    "entity_class", "CUSTOMER").strip().upper()
+                if entity_class not in ("CUSTOMER", "INTERNAL"):
+                    errors.append(
+                        f"{node.label}: entity_class 必须是 "
+                        "CUSTOMER 或 INTERNAL")
                 by_lower = {
                     name.lower(): spec
                     for name, spec in self.variables.items()
@@ -387,9 +393,9 @@ class Model:
                             # 允许 CAPACITY(R)+N、ordernum 等运行时表达式。
                             pass
                         else:
-                            if value < 1:
+                            if value < 0:
                                 errors.append(
-                                    f"{node.label}: capacity 必须 >= 1")
+                                    f"{node.label}: capacity 必须 >= 0")
                 elif selector == "create":
                     target = node.args.get("create")
                     if target not in self.nodes:
@@ -501,6 +507,82 @@ class Model:
                 errors.append(f"边终点不存在: {edge.target}")
         if errors:
             raise HelixCompileError("；".join(errors))
+
+    def structure_warnings(self) -> list[str]:
+        """返回模型结构警告；不改变编译/运行行为。
+
+        这些检查依赖静态图，无法看到 Python ``entities=`` 注入的初始
+        实体，因此无 CREATE、不可达等只作为 warning。
+        """
+        warnings: list[str] = []
+        creates = [node for node in self.nodes.values()
+                   if node.kind == "CREATE"]
+        terminals = [node for node in self.nodes.values()
+                     if node.kind == "TERMINATE"]
+
+        if not creates:
+            warnings.append(
+                "模型没有 CREATE 入口；如果通过 Python entities= 注入"
+                "初始实体，可忽略此警告")
+        if not terminals:
+            warnings.append(
+                "模型没有 EXIT()/TERMINATE() 终止节点；如果只靠 end "
+                "停止，可忽略此警告")
+
+        incoming: dict[str, set[str]] = {
+            label: set() for label in self.nodes}
+        outgoing: dict[str, list[str]] = {
+            label: list(node.outgoing) for label, node in self.nodes.items()}
+
+        def add_edge(source: str, target: str | None) -> None:
+            if target and target in self.nodes:
+                outgoing[source].append(target)
+                incoming[target].add(source)
+
+        for label, node in self.nodes.items():
+            for target in node.outgoing:
+                add_edge(label, target)
+            for _condition, target in node.branches:
+                add_edge(label, target)
+            for _part, target in node.paths:
+                add_edge(label, target)
+            add_edge(label, node.args.get("preempted_to"))
+            add_edge(label, node.args.get("action"))
+            on_full = node.args.get("on_full", "").strip()
+            match = re.fullmatch(r"(?i)BALK\(([A-Za-z_]\w*)\)", on_full)
+            if match:
+                add_edge(label, match.group(1))
+
+        if creates:
+            reachable: set[str] = set()
+            stack = [node.label for node in creates]
+            while stack:
+                label = stack.pop()
+                if label in reachable:
+                    continue
+                reachable.add(label)
+                stack.extend(outgoing.get(label, []))
+            unreachable = [
+                label for label in self.order
+                if label not in reachable and label not in {
+                    node.label for node in creates}
+            ]
+            if unreachable:
+                shown = ", ".join(unreachable[:10])
+                if len(unreachable) > 10:
+                    shown += ", ..."
+                warnings.append(f"不可达节点: {shown}")
+
+        isolated = [
+            label for label in self.order
+            if not incoming[label] and not outgoing[label]
+        ]
+        if isolated:
+            shown = ", ".join(isolated[:10])
+            if len(isolated) > 10:
+                shown += ", ..."
+            warnings.append(f"孤立节点: {shown}")
+        return warnings
 
 
 # ----------------------------------------------------------------------

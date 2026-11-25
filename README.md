@@ -1,5 +1,8 @@
 # Helix
 
+[![tests](https://github.com/yjeff/helix/actions/workflows/tests.yml/badge.svg)](https://github.com/yjeff/helix/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 全新项目：实现 **Helix 语言**。
 
 ```text
@@ -26,10 +29,10 @@ docs/grammar.md          Helix 语言规范
 docs/language-reference.md 完整语法/案例对比
 docs/semantics.md        Helix 语义规范
 docs/known-differences.md 已知差异与不再排查项
-docs/slam-conversion.md SLAM → Helix 转换
 docs/design.md           实现架构
 docs/data-structures.md  数据结构
 docs/metrics.md          自动统计指标命名
+docs/Helix仿真软件用户手册.docx  用户手册
 docs/debug.md            DEBUG/动画数据
 src/helix/               实现
 examples/                新语法案例
@@ -93,6 +96,7 @@ Soaking Pit            结构完成，统计接近
 Tanker Fleet           统计完成，期末相位有差异
 Quarry Operations      完成，量级对齐
 Inventory Problem      lost/resource 接近，safety stock 待校准
+Port Operations        seed=11 与书中结果接近
 ```
 
 已知差异与不再排查项见：
@@ -123,14 +127,18 @@ helix run examples/tanker_fleet/model.helix \
 python -m helix check examples/serial_workstations/model.helix
 ```
 
-旧 SLAM 转换：
+`check` 会输出结构警告但不阻止运行：
 
-```bash
-helix convert ../slam_v2/examples/discrete/serial_workstations.slam \
-  -o examples/converted_serial.helix
+```text
+没有 CREATE 入口
+没有 EXIT()/TERMINATE()
+不可达节点
+孤立节点
 ```
 
-详见 [docs/slam-conversion.md](docs/slam-conversion.md)。
+这些是 warning，不改变模型行为。
+
+Helix 不提供旧 SLAM 模型自动转换工具；旧 `slam_v2` 仅作为历史对照资料保留。
 
 ## 动画播放器
 
@@ -155,6 +163,72 @@ python examples/machine_breakdown/run.py
 python examples/tanker_fleet/run.py
 python examples/quarry_operations/run.py
 python examples/inventory_problem/run.py
+python examples/port_operations/run.py
+```
+
+## 重复运行与随机流
+
+默认每个 `AWAIT`/`ACTIVITY`/`CREATE` 等节点使用稳定派生的独立随机子流：
+
+```bash
+helix run model.helix --end 8640 --seed 11
+```
+
+多次独立运行并输出 95% 半宽：
+
+```bash
+helix run model.helix --end 8640 --seed 11 --replicas 20
+```
+
+每次运行写出可复现 manifest：
+
+```bash
+helix run model.helix --end 8640 --seed 11 \
+  --replicas 20 --manifest out/run.json
+```
+
+默认不保留原始观测样本，只维护在线均值/方差。需要 SVG/分位数时：
+
+```bash
+helix run model.helix --end 8640 --seed 11 --keep-samples
+```
+
+Python API：
+
+```python
+scenario = model.initialize(initial=...)
+replica = scenario.run_replicas(20, seed=11, end=8640)
+metric = replica.observations()["TIME IN SYSTEM"]
+print(metric.mean, metric.half_width)
+replica.write_manifest("out/run.json")
+```
+
+旧版单随机流仅用于历史基线对照：
+
+```bash
+helix run model.helix --end 8640 --seed 11 --rng global
+```
+
+事件护栏：
+
+```bash
+helix run model.helix --max-events 2000000 \
+  --max-same-time-events 100000
+```
+
+`max_events` 限制总事件数，`max_same_time_events` 限制同一时刻的事件
+批次/连续节点数。
+
+方案对比默认按相同 seed 配对：
+
+```bash
+helix compare A.helix B.helix --end 8640 --seed 11 --replicas 20
+```
+
+不配对时：
+
+```bash
+helix compare A.helix B.helix --independent --replicas 20
 ```
 
 ## 代码结构

@@ -37,7 +37,8 @@ NETWORK
   TRIP_OBS: OBSERVE(name="TRIP TIME", value=TNOW - LOAD_START) -> LOOP
   LOOP: ACTIVITY(duration=0, servers=15) -> VLDZ
 
-  SHIFT: CREATE(interval=1.0, first=0.25, until=480)
+  SHIFT: CREATE(interval=1.0, first=0.25, until=480,
+                entity_class=INTERNAL)
   SETON: ASSIGN(LOAD_AVAIL=1)
   SHIFTDUR: ACTIVITY(duration=0.75)
   SETOFF: ASSIGN(LOAD_AVAIL=0)

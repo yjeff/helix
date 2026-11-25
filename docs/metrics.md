@@ -156,6 +156,63 @@ for item in result.observations:
     print(item.label, item.count, item.mean, item.std)
 ```
 
+观测统计使用 Welford 在线累计，`count/mean/std/min/max` 不依赖原始样本。
+`Observation.values` 只在 `retain_values=True` 时保存；Python API 默认保留，
+CLI 默认不保留，需要原始样本时加 `--keep-samples`。
+
+## 重复运行与置信区间
+
+```bash
+helix run model.helix --end 8640 --seed 11 --replicas 20
+```
+
+输出每个指标的：
+
+```text
+mean ± 95% half-width
+```
+
+种子为：
+
+```text
+seed, seed+1, ..., seed+N-1
+```
+
+默认每个节点使用独立随机子流：
+
+```text
+--rng substreams
+```
+
+旧版单随机流仅用于历史基线：
+
+```text
+--rng global
+```
+
+Python API：
+
+```python
+replica = scenario.run_replicas(20, seed=11, end=8640)
+```
+
+可复现 manifest：
+
+```bash
+helix run model.helix --end 8640 --seed 11 --manifest out/run.json
+```
+
+manifest 包含 model hash、seed、start/end、clear_time、rng_mode、
+initial/constants/entities 和观测数量。
+
+方案对比默认按相同 seed 配对，输出差值的半宽：
+
+```bash
+helix compare A.helix B.helix --end 8640 --seed 11 --replicas 20
+```
+
+使用 `--independent` 可改为独立区间比较。
+
 ## 默认报告
 
 不传 `track` 时，默认报告使用 Markdown 表格式。表头使用短名称，完整含义列在
@@ -172,6 +229,10 @@ CURRENT / BALK / AVG WAIT
 ## SERVICE ACTIVITY STATISTICS
 ACTIVITY / SERVERS / AVG UTIL. / STD. UTIL. / MAX UTIL. /
 CUR. UTIL. / AVG BLOCK. / MAX IDLE / MAX BUSY / COMPLETED
+
+## WAIT FILE STATISTICS
+WAIT FILE / RESOURCE / AVG LENGTH / STD. LENGTH /
+MAX LENGTH / CURRENT / WAIT COUNT / AVG WAIT
 
 ## RESOURCE STATISTICS
 RESOURCE / CAPACITY / AVAILABLE / AVG UTIL. / STD. UTIL. /

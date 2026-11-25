@@ -487,6 +487,22 @@ RESOURCE TOOL(2)
 
 `RESOURCE NAME(n)` 是 `capacity=n` 的简写。
 
+资源容量可以是 0：
+
+```text
+RESOURCE tug(capacity=0)
+```
+
+含义是当前没有可用单位，`AWAIT` 会等待；后续可用
+`ALTER(resource=tug, capacity=1)` 恢复。
+
+注意：
+
+```text
+RESOURCE R(0)   资源容量为 0，AWAIT 等待
+QUEUE(0)        队列容量无界
+```
+
 `mode` 可选：
 
 ```text
@@ -597,6 +613,56 @@ AWAIT 成功后实体继续到下一节点
 AWAIT 只申请，不自动释放
 ```
 
+资源等待优先级：
+
+```text
+AWAIT(resource=TUG, priority=2)
+AWAIT(resource=TUG, priority=HIGH(10))
+AWAIT(resource=TUG, priority=LOW(1))
+```
+
+`priority` 会设置当前实体的优先级，资源等待者按优先级降序唤醒。
+这可以模拟 SLAM 中同一资源的不同等待文件。
+
+例如港口拖轮：
+
+```text
+; 靠泊优先
+AWAIT(resource=tug, priority=2)
+...
+; 离泊较低优先
+AWAIT(resource=tug, priority=1)
+```
+
+### AWAIT 等待文件统计
+
+给 AWAIT 节点加 label 后，报告会按节点生成等待文件统计：
+
+```text
+BERTH_WAIT:   AWAIT(resource=berth, priority=0)
+TUG_BERTH:    AWAIT(resource=tug, priority=2)
+TUG_DEBERTH:  AWAIT(resource=tug, priority=1)
+```
+
+对应报告：
+
+```text
+## WAIT FILE STATISTICS
+```
+
+统计：
+
+```text
+AVG LENGTH
+STD. LENGTH
+MAX LENGTH
+CURRENT
+WAIT COUNT
+AVG WAIT
+```
+
+这对应 SLAM 的 file 1 / file 2 / file 3 统计。
+
 ### FREE
 
 释放资源：
@@ -649,6 +715,8 @@ ALTER(resource=radio, capacity=CAPACITY(radio) + ordernum)
 ALTER 三选一：resource / create / activity
 只影响后续抽样或后续启动
 已经排入 FEL 的事件不会取消或重算
+覆盖值只属于当前运行，不写回 Model
+重复运行和 --replicas 不继承上一次 ALTER
 activity 只支持 duration 型
 ```
 
@@ -800,9 +868,23 @@ first
 priority
 count
 until
+entity_class
 ```
 
 `count` 和 `until` 互斥。
+
+`entity_class`：
+
+```text
+CUSTOMER  默认，进入自动 TIME IN SYSTEM
+INTERNAL  基础设施实体，不进入自动 TIME IN SYSTEM
+```
+
+示例：
+
+```text
+CREATE(interval=1, until=480, entity_class=INTERNAL)
+```
 
 无 `interval` 时：
 
@@ -1249,20 +1331,23 @@ pip install -e .
 helix check examples/serial_workstations/model.helix
 ```
 
+`check` 还会输出结构 warning：
+
+```text
+没有 CREATE 入口
+没有 EXIT()/TERMINATE()
+不可达节点
+孤立节点
+```
+
+warning 不阻止运行，也不改变模型行为；无 CREATE 的模型可以通过
+Python `entities=` 注入初始实体。
+
 运行：
 
 ```bash
 helix run examples/serial_workstations/model.helix --end 300 --seed 1
 ```
-
-旧 SLAM 转换：
-
-```bash
-helix convert ../slam_v2/examples/discrete/serial_workstations.slam \
-  -o examples/converted_serial.helix
-```
-
-详见 [slam-conversion.md](slam-conversion.md)。
 
 参数：
 
@@ -1566,6 +1651,7 @@ Soaking Pit            结构完成，统计接近
 Tanker Fleet           草稿，暂停
 Quarry Operations      完成，量级对齐
 Inventory Problem      部分对齐，safety stock 待校准
+Port Operations        seed=11 接近书中结果
 ```
 
 Machine Breakdown 与 Table 6-1：

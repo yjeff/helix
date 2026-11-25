@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 import re
@@ -32,6 +33,8 @@ from ..parser import _parse_kv_args, _split_top_level
 from ..continuous.expressions import Expression
 from .state import (
     ActivityState,
+    AwaitState,
+    AwaitStat,
     Observation,
     QueueStat,
     QueueState,
@@ -53,7 +56,22 @@ class DiscreteRuntime:
         self.kernel = kernel
         self.model = kernel.model
         self.scenario = kernel.scenario
-        self.rng = random.Random(kernel.seed)
+        self.seed = kernel.seed
+        self.retain_samples = bool(getattr(kernel, "retain_samples", True))
+        self.rng_mode = getattr(kernel, "rng_mode", "substreams")
+        if self.rng_mode not in ("substreams", "global"):
+            raise HelixRuntimeError(
+                f"未知 rng_mode={self.rng_mode}；"
+                "必须是 substreams 或 global")
+        self._global_rng = random.Random(self.seed)
+        self._rngs: dict[str, random.Random] = {}
+        # ALTER 只改本次运行的覆盖值，不能写回共享 Model。
+        self.create_intervals: dict[str, str] = {}
+        self.activity_durations: dict[str, str] = {}
+        self.max_events = getattr(kernel, "max_events", 1_000_000)
+        self.max_same_time_events = getattr(
+            kernel, "max_same_time_events", 100_000)
+        self._route_depth = 0
 
         self.entities: dict[int, Entity] = {}
         self.next_entity_id = 1
@@ -116,6 +134,11 @@ class DiscreteRuntime:
                 available=spec.capacity,
                 mode=spec.mode,
             )
+        self.await_states = {
+            node.label: AwaitState(node.label, node.args["resource"])
+            for node in self.model.nodes.values()
+            if node.kind == "AWAIT" and "resource" in node.args
+        }
         for spec in self.model.gates.values():
             self.gates[spec.name] = GateState(
                 name=spec.name, state=spec.state)
@@ -260,6 +283,15 @@ class DiscreteRuntime:
             resource.wait_max = 0.0
             for entity_id in resource.waiters:
                 resource.wait_enter[entity_id] = now
+        for await_state in self.await_states.values():
+            await_state.area = 0.0
+            await_state.area2 = 0.0
+            await_state.max_length = await_state.current_length
+            await_state.wait_count = 0
+            await_state.wait_sum = 0.0
+            await_state.wait_max = 0.0
+            for entity_id in await_state.waiting:
+                await_state.wait_enter[entity_id] = now
         for gate in self.gates.values():
             gate.wait_count = 0
 
@@ -289,6 +321,12 @@ class DiscreteRuntime:
             resource.area += held * dt
             resource.area2 += held * held * dt
             resource.max_held = max(resource.max_held, held)
+        for await_state in self.await_states.values():
+            length = await_state.current_length
+            await_state.area += length * dt
+            await_state.area2 += length * length * dt
+            await_state.max_length = max(
+                await_state.max_length, length)
 
     @staticmethod
     def _update_server_interval(server: ServerState, now: float) -> None:
@@ -359,9 +397,18 @@ class DiscreteRuntime:
     # ------------------------------------------------------------------
     # CREATE
     # ------------------------------------------------------------------
+    def _create_class(self, node: NodeSpec) -> str:
+        value = node.args.get("entity_class", "CUSTOMER").strip().upper()
+        if value not in ("CUSTOMER", "INTERNAL"):
+            raise HelixRuntimeError(
+                f"{node.label}: entity_class 必须是 CUSTOMER 或 INTERNAL")
+        return value
+
     def _on_create(self, event: Event) -> None:
         node = self.model.node(event.node)
-        control = {"interval", "first", "count", "priority", "until"}
+        control = {"interval", "first", "count", "priority", "until",
+                   "entity_class"}
+        entity_class = self._create_class(node)
         attr_specs: dict[str, list[str]] = {}
         for key, value in node.args.items():
             if key.lower() in control:
@@ -375,7 +422,8 @@ class DiscreteRuntime:
         if max_count is not None and count >= int(max_count):
             return
 
-        interval = node.args.get("interval")
+        interval = self.create_intervals.get(
+            node.label, node.args.get("interval"))
         # 无 interval 时 count 表示一次批量创建的实体数；属性列表也走这里。
         if not interval and (attr_specs or max_count is not None):
             limit = int(max_count) if max_count is not None else len(
@@ -383,7 +431,8 @@ class DiscreteRuntime:
             while count < limit:
                 count += 1
                 priority = self._number(node.args.get("priority", "0"))
-                entity = self._new_entity(priority=priority)
+                entity = self._new_entity(
+                    priority=priority, entity_class=entity_class)
                 if attr_specs:
                     self._apply_create_attrs(node, entity, count, attr_specs)
                 self._route(entity, node.outgoing[0]
@@ -394,7 +443,8 @@ class DiscreteRuntime:
         count += 1
         self.create_counts[node.label] = count
         priority = self._number(node.args.get("priority", "0"))
-        entity = self._new_entity(priority=priority)
+        entity = self._new_entity(
+            priority=priority, entity_class=entity_class)
         if attr_specs:
             self._apply_create_attrs(node, entity, count, attr_specs)
         self._route(entity, node.outgoing[0] if node.outgoing else None)
@@ -404,7 +454,8 @@ class DiscreteRuntime:
         if max_count is not None and count >= int(max_count):
             return
 
-        next_time = self.kernel.now + self._sample(interval)
+        next_time = self.kernel.now + self._sample(
+            interval, node=node, key="interval")
         until = node.args.get("until")
         if until is not None and next_time > float(until) + 1e-12:
             return
@@ -423,7 +474,7 @@ class DiscreteRuntime:
             raw = values[index - 1].strip()
             if raw.upper().startswith(
                     ("UNFRM(", "RNORM(", "EXPON(", "EXP(", "ERLNG(")):
-                value = self._sample(raw)
+                value = self._sample(raw, node=node, key=f"attr:{name}")
             else:
                 value = Expression(
                     raw, label=f"{node.label}:{name}").evaluate(context)
@@ -439,7 +490,25 @@ class DiscreteRuntime:
                 f"实体 {entity.id} 没有后继节点")
         node = self.model.node(target)
         entity.current_node = target
+        self._route_depth += 1
+        try:
+            if (self.max_same_time_events is not None
+                    and self._route_depth > self.max_same_time_events):
+                raise HelixRuntimeError(
+                    "同一时刻连续节点数超过上限 "
+                    f"max_same_time_events={self.max_same_time_events}: "
+                    f"now={self.kernel.now}")
+            if (self.max_events is not None
+                    and self._route_depth > self.max_events):
+                raise HelixRuntimeError(
+                    f"连续节点数超过事件总数上限 max_events="
+                    f"{self.max_events}: now={self.kernel.now}")
+            self._route_node(entity, target, node)
+        finally:
+            self._route_depth -= 1
 
+    def _route_node(self, entity: Entity, target: str,
+                    node: NodeSpec) -> None:
         if node.kind == "QUEUE":
             self._enqueue(self.queues[target], entity)
         elif node.kind == "ACTIVITY":
@@ -488,9 +557,10 @@ class DiscreteRuntime:
 
     def _terminate(self, entity: Entity) -> None:
         entity.status = "BALKED" if entity.balked else "TERMINATED"
-        if not entity.balked:
+        if not entity.balked and entity.entity_class != "INTERNAL":
             observation = self.observations.setdefault(
-                "TIME IN SYSTEM", Observation("TIME IN SYSTEM"))
+                "TIME IN SYSTEM", Observation(
+                    "TIME IN SYSTEM", retain_values=self.retain_samples))
             observation.add(self.kernel.now - entity.created_at)
 
     # ------------------------------------------------------------------
@@ -666,7 +736,8 @@ class DiscreteRuntime:
             server.busy_since = self.kernel.now
 
         node = self.model.node(activity.label)
-        duration_spec = node.args.get("duration", "0").strip()
+        duration_spec = self.activity_durations.get(
+            node.label, node.args.get("duration", "0")).strip()
         upper_duration = duration_spec.upper()
         if upper_duration.startswith("STOPA(") or upper_duration.startswith("REL("):
             raise HelixRuntimeError(
@@ -687,7 +758,10 @@ class DiscreteRuntime:
             return
 
         if duration is None:
-            duration = self._sample(node.args.get("duration", "0"), entity)
+            duration = self._sample(
+                self.activity_durations.get(
+                    node.label, node.args.get("duration", "0")),
+                entity, node=node, key="duration")
 
         # 每次开始服务都生成新 token；PREEMPT 时 token++，旧 END
         # 事件到达后会被识别为过期事件而忽略。
@@ -842,7 +916,8 @@ class DiscreteRuntime:
             upper = expression.strip().upper()
             if upper.startswith(("UNFRM(", "RNORM(", "EXPON(",
                                  "EXP(", "ERLNG(")):
-                value = self._sample(expression)
+                value = self._sample(
+                    expression, namespace=label, key=f"assign:{name}")
             else:
                 value = Expression(
                     expression, label=f"{label}:{name}").evaluate(context)
@@ -890,7 +965,8 @@ class DiscreteRuntime:
         value = Expression(
             node.args.get("value", "0"),
             label=f"{node.label}:{name}").evaluate(context)
-        observation = self.observations.setdefault(name, Observation(name))
+        observation = self.observations.setdefault(
+            name, Observation(name, retain_values=self.retain_samples))
         observation.add(value)
         if route:
             self._route(entity, node.outgoing[0]
@@ -987,6 +1063,27 @@ class DiscreteRuntime:
             return max(0, resource.capacity - resource.available)
         return sum(resource.held_by.values())
 
+    def _await_enter(self, node: NodeSpec, entity: Entity) -> None:
+        state = self.await_states.get(node.label)
+        if state is None:
+            return
+        state.current_length += 1
+        state.max_length = max(state.max_length, state.current_length)
+        state.waiting.add(entity.id)
+        state.wait_enter[entity.id] = self.kernel.now
+        state.wait_count += 1
+
+    def _await_leave(self, entity: Entity) -> None:
+        state = self.await_states.get(entity.current_node or "")
+        if state is None or entity.id not in state.waiting:
+            return
+        entered = state.wait_enter.pop(entity.id, self.kernel.now)
+        state.waiting.remove(entity.id)
+        state.current_length = max(0, state.current_length - 1)
+        wait = max(0.0, self.kernel.now - entered)
+        state.wait_sum += wait
+        state.wait_max = max(state.wait_max, wait)
+
     def _await(self, node: NodeSpec, entity: Entity) -> None:
         """申请资源或等待 GATE。
 
@@ -1021,6 +1118,8 @@ class DiscreteRuntime:
                 self._expression_context(entity)))
         if units < 1:
             raise HelixRuntimeError(f"{node.label}: units 必须 >= 1")
+        if "priority" in node.args:
+            entity.priority = self._preempt_priority(node, entity)
 
         if resource.available >= units:
             if resource.mode == "RESTOCK":
@@ -1034,6 +1133,7 @@ class DiscreteRuntime:
             resource.waiters.append(entity.id)
             resource.wait_count += 1
             resource.wait_enter[entity.id] = self.kernel.now
+            self._await_enter(node, entity)
 
     def _free(self, node: NodeSpec, entity: Entity) -> None:
         """释放资源；随后唤醒能获得资源的最高优先级等待者。"""
@@ -1059,7 +1159,8 @@ class DiscreteRuntime:
             resource.held_by[entity.id] = held - release
             if resource.held_by[entity.id] == 0:
                 del resource.held_by[entity.id]
-            resource.available += release
+            resource.available = min(
+                resource.capacity, resource.available + release)
         self._route(entity, node.outgoing[0] if node.outgoing else None)
         self._wake_resource(resource)
 
@@ -1072,6 +1173,7 @@ class DiscreteRuntime:
             resource.wait_max = max(resource.wait_max, wait)
         resource.available -= units
         resource.held_by[entity.id] = resource.held_by.get(entity.id, 0) + units
+        self._await_leave(entity)
 
     def _allocate_stock(self, resource: ResourceState, entity: Entity,
                         units: int) -> None:
@@ -1081,6 +1183,7 @@ class DiscreteRuntime:
             resource.wait_sum += wait
             resource.wait_max = max(resource.wait_max, wait)
         resource.available -= units
+        self._await_leave(entity)
 
     def _wake_resource(self, resource: ResourceState) -> None:
         """按 priority 降序扫描等待者，唤醒第一个能完整满足的实体。"""
@@ -1148,8 +1251,8 @@ class DiscreteRuntime:
             capacity = int(Expression(
                 raw_capacity, label=f"{node.label}:capacity").evaluate(
                     self._expression_context(entity)))
-            if capacity < 1:
-                raise HelixRuntimeError(f"{node.label}: capacity 必须 >= 1")
+            if capacity < 0:
+                raise HelixRuntimeError(f"{node.label}: capacity 必须 >= 0")
             if resource.mode == "RESTOCK":
                 delta = capacity - resource.capacity
                 resource.capacity = capacity
@@ -1172,8 +1275,8 @@ class DiscreteRuntime:
             if not interval:
                 raise HelixRuntimeError(
                     f"{node.label}: ALTER create 需要 interval")
-            # 只修改后续抽样；已经排入 FEL 的 CREATE 事件保持不变。
-            target.args["interval"] = interval
+            # 只修改本次运行时后续抽样；不写回共享 Model。
+            self.create_intervals[create_name] = interval
             return
 
         activity_name = node.args.get("activity")
@@ -1189,8 +1292,8 @@ class DiscreteRuntime:
             if not duration:
                 raise HelixRuntimeError(
                     f"{node.label}: ALTER activity 需要 duration")
-            # 只影响后续启动；正在运行的活动保留自己的结束事件。
-            target.args["duration"] = duration
+            # 只影响本次运行时后续启动；不写回共享 Model。
+            self.activity_durations[activity_name] = duration
             return
 
         raise HelixRuntimeError(
@@ -1442,7 +1545,7 @@ class DiscreteRuntime:
             state.cursor = (index + 1) % len(candidates)
             return candidates[index]
         if rule == "RAN":
-            return self.rng.choice(candidates)
+            return self._rng(state.label, "server").choice(candidates)
         if rule == "LIT":
             return min(candidates,
                        key=lambda pair: (pair[1].idle_since, pair[1].index))
@@ -1556,6 +1659,7 @@ class DiscreteRuntime:
             attrs=dict(source.attrs),
             origin_id=source.origin_id or source.id,
             part=source.part,
+            entity_class=source.entity_class,
         )
         clone.created_at = source.created_at
         return clone
@@ -1600,6 +1704,7 @@ class DiscreteRuntime:
             attrs=attrs,
             origin_id=entities[0].id,
             part=None,
+            entity_class=chosen.entity_class,
         )
         # JOIN 后的系统时间从组内最早创建时间算起。
         merged.created_at = min(item.created_at for item in entities)
@@ -1609,7 +1714,7 @@ class DiscreteRuntime:
     # IF
     # ------------------------------------------------------------------
     def _enter_if(self, node: NodeSpec, entity: Entity) -> None:
-        draw = self.rng.random() if any(
+        draw = self._rng(node.label, "if").random() if any(
             "RANDOM" in condition.upper()
             for condition, _ in node.branches) else None
         for condition, target in node.branches:
@@ -1661,11 +1766,13 @@ class DiscreteRuntime:
     def _new_entity(self, *, priority: float = 0.0,
                     attrs: dict[str, float] | None = None,
                     origin_id: int | None = None,
-                    part: str | None = None) -> Entity:
+                    part: str | None = None,
+                    entity_class: str = "CUSTOMER") -> Entity:
         entity = Entity(
             id=self.next_entity_id,
             created_at=self.kernel.now,
             priority=priority,
+            entity_class=entity_class,
             attrs=dict(attrs or {}),
             origin_id=origin_id,
             part=part,
@@ -1706,27 +1813,48 @@ class DiscreteRuntime:
                     f"{node.label}: {name} 含非法标签: {item!r}")
         return items
 
-    def _sample(self, spec: str, entity: Entity | None = None) -> float:
+    def _rng(self, namespace: str, key: str = "") -> random.Random:
+        """返回稳定派生的独立随机流。
+
+        流名包含 seed、节点/用途和参数名，因此在一个节点增加采样
+        不会移动其他节点的随机序列，便于公共随机数对比。
+        """
+        if self.rng_mode == "global":
+            return self._global_rng
+        name = f"{self.seed}|{namespace}|{key}"
+        stream = self._rngs.get(name)
+        if stream is None:
+            digest = hashlib.sha256(name.encode("utf-8")).digest()
+            stream = random.Random(int.from_bytes(digest[:16], "big"))
+            self._rngs[name] = stream
+        return stream
+
+    def _sample(self, spec: str, entity: Entity | None = None,
+                node: NodeSpec | None = None,
+                key: str = "sample",
+                namespace: str | None = None) -> float:
         """抽样分布，或计算实体上下文中的时间表达式。"""
         text = str(spec).strip()
         upper = text.upper()
+        stream = self._rng(
+            node.label if node is not None else (namespace or "GLOBAL"), key)
         if upper.startswith(("EXPON(", "EXP(")):
             mean = self._sample_arg(
                 text[text.index("(") + 1:-1], entity, "EXPON mean")
-            return self.rng.expovariate(1.0 / mean)
+            return stream.expovariate(1.0 / mean)
         if upper.startswith("ERLNG("):
             args = _split_top_level(text[6:-1])
-            return self.rng.gammavariate(
+            return stream.gammavariate(
                 self._sample_arg(args[1], entity, "ERLNG stages"),
                 self._sample_arg(args[0], entity, "ERLNG mean"))
         if upper.startswith("RNORM("):
             args = _split_top_level(text[6:-1])
-            return self.rng.gauss(
+            return stream.gauss(
                 self._sample_arg(args[0], entity, "RNORM mean"),
                 self._sample_arg(args[1], entity, "RNORM std"))
         if upper.startswith("UNFRM("):
             args = _split_top_level(text[6:-1])
-            return self.rng.uniform(
+            return stream.uniform(
                 self._sample_arg(args[0], entity, "UNFRM low"),
                 self._sample_arg(args[1], entity, "UNFRM high"))
         if entity is not None:
@@ -1813,6 +1941,22 @@ class DiscreteRuntime:
                               if resource.wait_count else 0.0),
                 max_wait=resource.wait_max,
             ))
+        awaits: list[AwaitStat] = []
+        for state in self.await_states.values():
+            mean = state.area / duration
+            variance = max(0.0, state.area2 / duration - mean * mean)
+            awaits.append(AwaitStat(
+                label=state.label,
+                resource=state.resource,
+                average_length=mean,
+                std_length=math.sqrt(variance),
+                max_length=state.max_length,
+                current_length=state.current_length,
+                wait_count=state.wait_count,
+                average_wait=(state.wait_sum / state.wait_count
+                              if state.wait_count else 0.0),
+                max_wait=state.wait_max,
+            ))
         gates = [
             GateStat(
                 name=gate.name,
@@ -1829,5 +1973,26 @@ class DiscreteRuntime:
             queues=queues,
             services=services,
             resources=resources,
+            awaits=awaits,
             gates=gates,
+            seed=self.kernel.seed,
+            start=self.kernel.start,
+            end=self.kernel.end,
+            clear_time=self.kernel.clear_time,
+            rng_mode=self.rng_mode,
+            retain_samples=self.retain_samples,
+            model_hash=self.model.source_hash,
+            initial=dict(self.scenario.initial),
+            constants=dict(self.scenario.constants),
+            entities={
+                label: len(items)
+                for label, items in self.scenario.entities.items()
+            },
+            entity_data={
+                label: [dict(item) for item in items]
+                for label, items in self.scenario.entities.items()
+            },
+            continuous_options=dict(self.kernel.continuous_options),
+            max_events=self.max_events,
+            max_same_time_events=self.max_same_time_events,
         )

@@ -18,7 +18,7 @@ class TruckCaseTest(unittest.TestCase):
         result = model.initialize(entities={
             "TRKS": [{}, {}, {}, {}],
             "LDER": [{}, {}],
-        }).run(end=560, seed=1230)
+        }).run(end=560, seed=1230, rng_mode="global")
 
         self.assertAlmostEqual(result.queues[0].average_length, 0.1758,
                                places=3)

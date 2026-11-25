@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import helix  # noqa: E402
+from helix.runtime.state import Observation  # noqa: E402
 
 
 MODEL = """
@@ -116,6 +117,20 @@ END
             self.assertIn("<polyline", svg.read_text(encoding="utf-8"))
         finally:
             shutil.rmtree(out, ignore_errors=True)
+
+
+class ObservationTest(unittest.TestCase):
+
+    def test_welford_without_samples(self):
+        observation = Observation("X", retain_values=False)
+        for value in (1.0, 2.0, 3.0):
+            observation.add(value)
+        self.assertEqual(observation.values, [])
+        self.assertEqual(observation.count, 3)
+        self.assertAlmostEqual(observation.mean, 2.0)
+        self.assertAlmostEqual(observation.std, 1.0)
+        self.assertEqual(observation.minimum, 1.0)
+        self.assertEqual(observation.maximum, 3.0)
 
 
 if __name__ == "__main__":

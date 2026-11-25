@@ -102,7 +102,11 @@ class Scenario:
     # ------------------------------------------------------------------
     def run(self, *, start: float = 0.0, end: float | None = None,
             seed: int = 0, debug: bool = False,
-            debug_path: str | None = None, clear_time: float | None = None):
+            debug_path: str | None = None, clear_time: float | None = None,
+            retain_samples: bool = True,
+            rng_mode: str = "substreams",
+            max_events: int | None = 1_000_000,
+            max_same_time_events: int | None = 100_000):
         """运行场景并返回 RunResult。
 
         start/end/seed 属于运行控制；continuous 已在 initialize 中固定。
@@ -119,4 +123,37 @@ class Scenario:
             debug_path=debug_path,
             clear_time=None if clear_time is None else float(clear_time),
             continuous=self.continuous,
+            retain_samples=retain_samples,
+            rng_mode=rng_mode,
+            max_events=max_events,
+            max_same_time_events=max_same_time_events,
         ).run()
+
+    def run_replicas(self, n: int = 10, *, seed: int = 0,
+                     start: float = 0.0, end: float | None = None,
+                     clear_time: float | None = None,
+                     rng_mode: str = "substreams",
+                     retain_samples: bool = False,
+                     max_events: int | None = 1_000_000,
+                     max_same_time_events: int | None = 100_000):
+        """运行 n 个独立副本，返回带置信半宽的聚合结果。"""
+        if n < 1:
+            raise ValueError("replicas 必须 >= 1")
+        from .replicas import ReplicaResult
+
+        seeds = [int(seed) + offset for offset in range(n)]
+        results = [
+            self.run(
+                start=start,
+                end=end,
+                seed=run_seed,
+                clear_time=clear_time,
+                retain_samples=retain_samples,
+                rng_mode=rng_mode,
+                max_events=max_events,
+                max_same_time_events=max_same_time_events,
+            )
+            for run_seed in seeds
+        ]
+        return ReplicaResult(results=results, seeds=seeds)
+

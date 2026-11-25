@@ -54,6 +54,7 @@ class Entity:
     id: int
     created_at: float
     priority: float = 0.0
+    entity_class: str = "CUSTOMER"
     preempt_priority: float = 0.0
     attrs: dict[str, float] = field(default_factory=dict)
     current_node: str | None = None

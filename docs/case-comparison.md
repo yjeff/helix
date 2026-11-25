@@ -474,6 +474,50 @@ FREE 的 units 必须按当前 orderqty 动态求值
 `SAFETY STOCK` 是到货瞬间的 `AVAILABLE(radio)`，对订单触发时机和
 随机到货时间非常敏感；剩余差异需要继续校准补货时序。
 
+## Port Operations（seed=11 接近）
+
+Helix 模型：
+
+```text
+examples/port_operations/model.helix
+```
+
+参数：
+
+```text
+end=8640
+seed=11
+```
+
+书中 / Helix：
+
+```text
+T1  30.68  / 31.19
+T2  36.89  / 36.09
+T3  49.17  / 47.48
+T4  34.54  / 34.48
+berth avg held 2.8285 / 2.8352
+tug avg held   0.2135 / 0.2153
+```
+
+等待文件：
+
+```text
+file 1 BERTH_WAIT   1.1349 / 1.0880
+file 2 TUG_BERTH    0.0233 / 0.0187
+file 3 TUG_DEBERTH  0.0248 / 0.0215
+```
+
+关键实现：
+
+```text
+AWAIT 节点 label 作为等待文件
+AWAIT priority 区分靠泊/离泊
+ACTIVITY servers=3 对应 3 个泊位
+type 4 往返 ACTIVITY servers=5
+ALTER capacity=0/1 模拟风暴
+```
+
 ## 待迁移
 
 ```text

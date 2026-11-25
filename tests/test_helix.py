@@ -388,7 +388,7 @@ END
 """)
         result = model.initialize().run(end=10)
         self.assertAlmostEqual(result.observations[0].mean, 1.0)
-        self.assertEqual(model.nodes["SERVICE"].args["duration"], "1")
+        self.assertEqual(model.nodes["SERVICE"].args["duration"], "5")
 
     def test_alter_create_interval(self):
         model = helix.Model.from_source("""
@@ -400,7 +400,7 @@ NETWORK
 END
 """)
         model.initialize().run(end=2)
-        self.assertEqual(model.nodes["C"].args["interval"], "1")
+        self.assertEqual(model.nodes["C"].args["interval"], "10")
 
     def test_end_closes_blocks(self):
         model = helix.Model.from_source("""

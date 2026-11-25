@@ -16,7 +16,8 @@ class SerialCaseTest(unittest.TestCase):
 
     def test_old_new_parity(self):
         model = helix.Model.from_file(str(MODEL))
-        result = model.initialize().run(end=300, seed=1381)
+        result = model.initialize().run(
+            end=300, seed=1381, rng_mode="global")
 
         self.assertEqual(result.observations[0].count, 562)
         self.assertAlmostEqual(result.observations[0].mean, 3.0301, places=3)

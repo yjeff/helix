@@ -19,7 +19,8 @@ class MachineBreakdownCaseTest(unittest.TestCase):
         uses = []
         repairs = []
         for seed in range(5):
-            result = model.initialize().run(end=1000.0, seed=seed)
+            result = model.initialize().run(
+                end=1000.0, seed=seed, rng_mode="global")
             services = {s.activity: s for s in result.services}
             times.append(result.observations[0].mean)
             uses.append(

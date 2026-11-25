@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 from collections import deque
 from dataclasses import dataclass, field
@@ -160,38 +161,57 @@ def _write_continuous_svg(path: Path, samples: list[dict],
 
 @dataclass(slots=True)
 class Observation:
-    """普通观测样本。"""
+    """普通观测样本。
+
+    始终维护在线 count/mean/variance/min/max；``values`` 只在
+    ``retain_values=True`` 时保存，避免大样本模型占用过多内存。
+    """
 
     label: str
+    retain_values: bool = True
     values: list[float] = field(default_factory=list)
+    _count: int = 0
+    _mean: float = 0.0
+    _m2: float = 0.0
+    _minimum: float = 0.0
+    _maximum: float = 0.0
 
     def add(self, value: float) -> None:
-        self.values.append(float(value))
+        value = float(value)
+        self._count += 1
+        delta = value - self._mean
+        self._mean += delta / self._count
+        self._m2 += delta * (value - self._mean)
+        if self._count == 1:
+            self._minimum = value
+            self._maximum = value
+        else:
+            self._minimum = min(self._minimum, value)
+            self._maximum = max(self._maximum, value)
+        if self.retain_values:
+            self.values.append(value)
 
     @property
     def count(self) -> int:
-        return len(self.values)
+        return self._count
 
     @property
     def mean(self) -> float:
-        return sum(self.values) / len(self.values) if self.values else 0.0
+        return self._mean
 
     @property
     def std(self) -> float:
-        if len(self.values) < 2:
+        if self._count < 2:
             return 0.0
-        mean = self.mean
-        return math.sqrt(
-            sum((value - mean) ** 2 for value in self.values)
-            / (len(self.values) - 1))
+        return math.sqrt(max(0.0, self._m2) / (self._count - 1))
 
     @property
     def minimum(self) -> float:
-        return min(self.values) if self.values else 0.0
+        return self._minimum
 
     @property
     def maximum(self) -> float:
-        return max(self.values) if self.values else 0.0
+        return self._maximum
 
 
 @dataclass(slots=True)
@@ -272,6 +292,23 @@ class ActivityState:
 
 
 @dataclass(slots=True)
+class AwaitState:
+    """AWAIT 节点的等待文件统计。"""
+
+    label: str
+    resource: str
+    current_length: int = 0
+    max_length: int = 0
+    area: float = 0.0
+    area2: float = 0.0
+    waiting: set[int] = field(default_factory=set)
+    wait_count: int = 0
+    wait_sum: float = 0.0
+    wait_max: float = 0.0
+    wait_enter: dict[int, float] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class SelectState:
     """SELECT 节点运行态。
 
@@ -338,6 +375,19 @@ class ResourceStat:
 
 
 @dataclass(slots=True)
+class AwaitStat:
+    label: str
+    resource: str
+    average_length: float
+    std_length: float
+    max_length: int
+    current_length: int
+    wait_count: int
+    average_wait: float
+    max_wait: float
+
+
+@dataclass(slots=True)
 class GateStat:
     name: str
     state: str
@@ -385,12 +435,63 @@ class RunResult:
     queues: list[QueueStat]
     services: list[ServiceStat]
     resources: list[ResourceStat] = field(default_factory=list)
+    awaits: list[AwaitStat] = field(default_factory=list)
     gates: list[GateStat] = field(default_factory=list)
     continuous: list[dict] = field(default_factory=list)
     continuous_final: dict[str, float] = field(default_factory=dict)
     global_values: dict[str, float] = field(default_factory=dict)
     variables: dict[str, str] = field(default_factory=dict)
     debug_path: str | None = None
+    seed: int | None = None
+    start: float = 0.0
+    end: float | None = None
+    clear_time: float | None = None
+    rng_mode: str = "substreams"
+    retain_samples: bool = True
+    engine_version: str = "0.1.0"
+    model_hash: str = ""
+    initial: dict[str, float] = field(default_factory=dict)
+    constants: dict[str, float] = field(default_factory=dict)
+    entities: dict[str, int] = field(default_factory=dict)
+    entity_data: dict[str, list[dict[str, float]]] = field(
+        default_factory=dict)
+    continuous_options: dict = field(default_factory=dict)
+    max_events: int | None = None
+    max_same_time_events: int | None = None
+
+    def manifest(self) -> dict:
+        """返回足以复现这次运行的配置摘要。"""
+        return {
+            "project": self.project,
+            "engine_version": self.engine_version,
+            "model_hash": self.model_hash,
+            "seed": self.seed,
+            "start": self.start,
+            "end": self.end,
+            "clear_time": self.clear_time,
+            "rng_mode": self.rng_mode,
+            "retain_samples": self.retain_samples,
+            "finished_at": self.now,
+            "initial": dict(sorted(self.initial.items())),
+            "constants": dict(sorted(self.constants.items())),
+            "entities": dict(sorted(self.entities.items())),
+            "entity_data": {
+                key: value for key, value in sorted(self.entity_data.items())
+            },
+            "continuous": dict(sorted(self.continuous_options.items())),
+            "max_events": self.max_events,
+            "max_same_time_events": self.max_same_time_events,
+            "observations": {
+                item.label: item.count for item in self.observations
+            },
+        }
+
+    def write_manifest(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self.manifest(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
 
     def summary(self) -> str:
         lines = [f"Helix: {self.project}", f"t = {self.now:.4f}"]
@@ -575,6 +676,17 @@ class RunResult:
             f"**DATE**  {date}",
             f"**RUN**  {run_number} OF {total_runs}",
             f"**CURRENT TIME**  {self.now:.4f}",
+        ]
+        if self.seed is not None:
+            lines += [
+                f"**MODEL HASH**  {self.model_hash[:16]}",
+                f"**SEED**  {self.seed}",
+                f"**RNG MODE**  {self.rng_mode}",
+                f"**END**  {self.end if self.end is not None else '-'}",
+                f"**CLEAR TIME**  "
+                f"{self.clear_time if self.clear_time is not None else '-'}",
+            ]
+        lines += [
             "",
         ]
 
@@ -615,6 +727,25 @@ class RunResult:
                         f"{queue.max_length} | {queue.current_length} | "
                         f"{queue.balk_count} | "
                         f"{queue.average_wait:.4f} |")
+                lines.append("")
+
+            if self.awaits:
+                lines += [
+                    "## WAIT FILE STATISTICS",
+                    "",
+                    "| WAIT FILE | RESOURCE | AVG LENGTH | STD. LENGTH | "
+                    "MAX LENGTH | CURRENT | WAIT COUNT | AVG WAIT |",
+                    "|---|---:|---:|---:|---:|---:|---:|---:|",
+                ]
+                for await_stat in self.awaits:
+                    lines.append(
+                        f"| {await_stat.label} | {await_stat.resource} | "
+                        f"{await_stat.average_length:.4f} | "
+                        f"{await_stat.std_length:.4f} | "
+                        f"{await_stat.max_length} | "
+                        f"{await_stat.current_length} | "
+                        f"{await_stat.wait_count} | "
+                        f"{await_stat.average_wait:.4f} |")
                 lines.append("")
 
             if self.services:

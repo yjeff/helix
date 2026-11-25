@@ -320,8 +320,11 @@ class Parser:
         if mode not in ("POOL", "RESTOCK"):
             self._error(
                 f"RESOURCE mode 必须是 POOL 或 RESTOCK: {mode}", statement)
+        capacity = int(args.get("capacity", 1))
+        if capacity < 0:
+            self._error("RESOURCE capacity 必须 >= 0", statement)
         return ResourceDecl(
-            match.group("name"), int(args.get("capacity", 1)),
+            match.group("name"), capacity,
             statement.line, mode)
 
     def _parse_gate(self, statement: Statement) -> GateDecl:

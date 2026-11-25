@@ -43,6 +43,88 @@ END
         self.assertAlmostEqual(resource.maximum_utilization, 0.5)
         self.assertAlmostEqual(resource.current_utilization, 0.0)
 
+    def test_capacity_zero_blocks_free_until_reopen(self):
+        model = helix.Model.from_source("""
+HELIX 1
+RESOURCE R(capacity=1)
+NETWORK
+  CREATE(count=1) -> HOLD
+  HOLD: AWAIT(R)
+        ACTIVITY(duration=2)
+        FREE(R)
+        EXIT()
+
+  CREATE(interval=1, first=1) -> STORM
+  STORM: ALTER(resource=R, capacity=0)
+         ACTIVITY(duration=2)
+         ALTER(resource=R, capacity=1)
+         EXIT()
+
+  CREATE(interval=1, first=0.5) -> WAIT
+  WAIT: AWAIT(R)
+        OBSERVE("GOT", TNOW)
+        EXIT()
+END
+""")
+        result = model.initialize().run(end=5, seed=1)
+        observations = {item.label: item for item in result.observations}
+        self.assertEqual(observations["GOT"].values, [3.0])
+
+    def test_await_priority_order(self):
+        model = helix.Model.from_source("""
+HELIX 1
+RESOURCE R(capacity=1)
+NETWORK
+  CREATE(count=1) -> HOLD
+  HOLD: AWAIT(R)
+        ACTIVITY(duration=1)
+        FREE(R)
+        EXIT()
+
+  CREATE(count=1) -> LOW
+  LOW: AWAIT(resource=R, priority=1)
+       OBSERVE("LOW", TNOW)
+       FREE(R)
+       EXIT()
+
+  CREATE(count=1) -> HIGH
+  HIGH: AWAIT(resource=R, priority=10)
+        OBSERVE("HIGH", TNOW)
+        ACTIVITY(duration=2)
+        FREE(R)
+        EXIT()
+END
+""")
+        result = model.initialize().run(end=5, seed=1)
+        observations = {item.label: item for item in result.observations}
+        self.assertEqual(observations["HIGH"].values, [1.0])
+        self.assertEqual(observations["LOW"].values, [3.0])
+
+    def test_capacity_zero_waits_until_alter(self):
+        model = helix.Model.from_source("""
+HELIX 1
+RESOURCE R(capacity=0)
+NETWORK
+  CREATE(count=1)
+  AWAIT(R)
+  OBSERVE("GOT RESOURCE", 1)
+  EXIT()
+
+  CREATE(interval=1, first=1)
+  ALTER(resource=R, capacity=1)
+  EXIT()
+END
+""")
+        result = model.initialize().run(end=3, seed=1)
+        observations = {item.label: item for item in result.observations}
+        self.assertEqual(observations["GOT RESOURCE"].count, 1)
+        self.assertEqual(len(result.awaits), 1)
+        wait = result.awaits[0]
+        self.assertEqual(wait.current_length, 0)
+        self.assertEqual(wait.max_length, 1)
+        self.assertAlmostEqual(wait.average_length, 1.0 / 3.0)
+        self.assertEqual(wait.wait_count, 1)
+
     def test_dynamic_units_expressions(self):
         model = helix.Model.from_source("""
 HELIX 1

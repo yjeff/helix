@@ -441,7 +441,15 @@ count 和 until 互斥
 count=创建数量上限
 until=创建时间上限
 省略 interval 时，count 表示本次批量创建数
+entity_class 默认 CUSTOMER
+entity_class=INTERNAL 不进入自动 TIME IN SYSTEM
 ```
+
+```text
+CREATE(count=1, entity_class=INTERNAL)
+```
+
+用于班次、维护车等基础设施实体。
 
 例如：
 
@@ -801,9 +809,25 @@ FREE(resource=DOCK, units=1);
 
 ```text
 capacity 默认为 1
+capacity 可以为 0
 AWAIT 申请 units
 FREE 释放 units
 不足时等待
+```
+
+`capacity=0`：
+
+```text
+资源暂时没有可用单位
+AWAIT 等待
+ALTER(resource=..., capacity=1) 后恢复
+```
+
+注意：
+
+```text
+RESOURCE R(0)   资源无可用单位，AWAIT 等待
+QUEUE(0)        无界队列
 ```
 
 资源模式：

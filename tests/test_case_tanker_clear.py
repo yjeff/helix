@@ -23,7 +23,7 @@ class TankerClearTest(unittest.TestCase):
     def test_clear_time_matches_old_window(self):
         model = helix.Model.from_file(str(MODEL))
         result = model.initialize(initial=INITIAL).run(
-            end=365, seed=1, clear_time=65)
+            end=365, seed=1, clear_time=65, rng_mode="global")
 
         services = {service.activity: service for service in result.services}
         # 旧版 MONTR,CLEAR,65 后 TRIP TIME count=303。
@@ -52,9 +52,10 @@ class TankerClearTest(unittest.TestCase):
 
     def test_clear_time_reduces_statistics(self):
         model = helix.Model.from_file(str(MODEL))
-        full = model.initialize(initial=INITIAL).run(end=100, seed=1)
+        full = model.initialize(initial=INITIAL).run(
+            end=100, seed=1, rng_mode="global")
         window = model.initialize(initial=INITIAL).run(
-            end=100, seed=1, clear_time=65)
+            end=100, seed=1, clear_time=65, rng_mode="global")
         full_ret = {s.activity: s.completed for s in full.services}["RET"]
         window_ret = {s.activity: s.completed for s in window.services}["RET"]
         self.assertLess(window_ret, full_ret)

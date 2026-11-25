@@ -335,6 +335,17 @@ RESOURCE TOOL(2)
 
 等价于 `capacity=`。
 
+资源容量可以为 0：
+
+```text
+RESOURCE tug(0)
+ALTER(resource=tug, capacity=0)   ; 暂时关闭
+ALTER(resource=tug, capacity=1)   ; 恢复
+```
+
+`RESOURCE R(0)` 表示没有可用单位，`AWAIT` 等待；这与
+`QUEUE(0)` 的“无界队列”不同。
+
 模式：
 
 ```text
@@ -506,7 +517,15 @@ priority 默认 0
 count 和 until 互斥
 count = 创建数量上限
 until = 创建时间上限
+entity_class 默认 CUSTOMER
+entity_class=INTERNAL 不进入自动 TIME IN SYSTEM
 ```
+
+```text
+CREATE(count=1, entity_class=INTERNAL)
+```
+
+用于班次、维护车等基础设施实体。
 
 无 `interval` 时，`count` 直接表示本次批量创建数：
 
@@ -772,6 +791,16 @@ units 必须 >= 1
 AWAIT 不会自动释放
 ```
 
+AWAIT 可以指定等待优先级：
+
+```text
+AWAIT(resource=TUG, priority=2)
+AWAIT(resource=TUG, priority=HIGH(10))
+AWAIT(resource=TUG, priority=LOW(1))
+```
+
+这相当于 SLAM 中同一资源的不同等待文件优先级。
+
 ### FREE
 
 ```text
@@ -822,6 +851,8 @@ ALTER 三选一：resource / create / activity
 只影响后续抽样或后续启动
 已经排入 FEL 的事件不会取消或重算
 activity 必须是 duration 型，不能改 until 型活动
+覆盖值只属于当前运行，不写回 Model
+重复运行和 --replicas 不继承上一次 ALTER
 ```
 
 ### PREEMPT

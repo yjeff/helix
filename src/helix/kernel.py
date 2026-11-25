@@ -22,7 +22,11 @@ class Kernel:
                  seed: int, debug: bool = False,
                  debug_path: str | None = None,
                  clear_time: float | None = None,
-                 continuous: dict | None = None) -> None:
+                 continuous: dict | None = None,
+                 retain_samples: bool = True,
+                 rng_mode: str = "substreams",
+                 max_events: int | None = 1_000_000,
+                 max_same_time_events: int | None = 100_000) -> None:
         self.scenario = scenario
         self.model = scenario.model
         self.start = start
@@ -32,6 +36,10 @@ class Kernel:
         self.clear_time = clear_time
         self.cleared = clear_time is None
         self.continuous_options = dict(continuous or {})
+        self.retain_samples = retain_samples
+        self.rng_mode = rng_mode
+        self.max_events = max_events
+        self.max_same_time_events = max_same_time_events
 
         self.seq = 0
         self.batch = 0
@@ -169,6 +177,8 @@ class Kernel:
         self.runtime.initialize()
         self._record_state("INIT")
         event_count = 0
+        last_event_time: float | None = None
+        same_time_count = 0
 
         while True:
             if not self.cel:
@@ -208,9 +218,21 @@ class Kernel:
 
             event = self.cel.popleft()
             event_count += 1
-            if event_count > 1_000_000:
+            if self.max_events is not None and event_count > self.max_events:
                 raise HelixRuntimeError(
-                    f"事件数超过上限，可能零时间循环: now={self.now}")
+                    f"事件总数超过上限 max_events={self.max_events}: "
+                    f"now={self.now}")
+            if event.time == last_event_time:
+                same_time_count += 1
+            else:
+                last_event_time = event.time
+                same_time_count = 1
+            if (self.max_same_time_events is not None
+                    and same_time_count > self.max_same_time_events):
+                raise HelixRuntimeError(
+                    "同一时刻事件数超过上限 "
+                    f"max_same_time_events={self.max_same_time_events}: "
+                    f"now={self.now}")
             if self.debug is not None:
                 # 先记录再处理，保证动画看到的是“事件发生前”的图；
                 # 事件 payload 中带有处理前的必要状态。

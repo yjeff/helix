@@ -129,7 +129,8 @@ AWAIT 在 SCAN 之前
 ```text
 Soaking 结构完成
 统计部分接近
-剩余差异来自旧版 LOAD/EXITP 回调的热交换细节
+剩余差异推测来自旧版 LOAD/EXITP 回调的热交换细节
+该归因尚未用书中状态图/原始报告验证
 停止继续扫参数
 ```
 
@@ -160,10 +161,15 @@ Repair 0%
 MATCH 尚未实现
 数组只支持 GLOBAL
 PIT/HOLD 等服务台数必须显式配置
-混合模型的 TIME IN SYSTEM 会包含基础设施实体
 ```
 
-Tanker 的 `SHIFT` 实体也会进入自动 `TIME IN SYSTEM` 观测，因此该指标不应与书中 TRIP TIME 混用。
+自动 `TIME IN SYSTEM` 默认只统计 `CUSTOMER` 实体。基础设施实体应标记：
+
+```text
+CREATE(..., entity_class=INTERNAL)
+```
+
+Tanker 的 `SHIFT` 已标记为 `INTERNAL`，因此不再混入该指标。
 
 ---
 

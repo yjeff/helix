@@ -253,6 +253,7 @@ Entity
   id: int
   created_at: float
   priority: float
+  entity_class: CUSTOMER | INTERNAL
   attrs: dict[str, Value]
   current_node: str | None
   status: EntityStatus
@@ -562,6 +563,24 @@ RESTOCK:
   HELD = capacity - available
 ```
 
+### AwaitState
+
+```text
+AwaitState
+  label: str
+  resource: str
+  current_length: int
+  max_length: int
+  area: float
+  area2: float
+  waiting: set[entity_id]
+  wait_count: int
+  wait_sum: float
+  wait_max: float
+```
+
+表示一个 AWAIT 节点的等待文件；同一资源的不同 AWAIT 节点分别统计。
+
 ### GateState
 
 ```text
@@ -612,17 +631,21 @@ MULT
 
 ## 10. Statistics
 
-### ObservationAccumulator
+### Observation
 
 ```text
-ObservationAccumulator
+Observation
   label: str
-  count: int
-  sum: float
-  sum_sq: float
-  min: float
-  max: float
-  values: list[float] | None   ; 仅 DEBUG
+  retain_values: bool
+
+  ; Welford 在线统计
+  _count: int
+  _mean: float
+  _m2: float
+  _minimum: float
+  _maximum: float
+
+  values: list[float]   ; 仅 retain_values=True 时保存
 ```
 
 方法：
@@ -700,6 +723,23 @@ ResourceStat
 POOL 模式的 `current_held` 是当前已持有量；RESTOCK 模式的
 `current_held` 是 `capacity - available`，`available` 是当前库存。
 
+### AwaitStat
+
+```text
+AwaitStat
+  label: str
+  resource: str
+  average_length: float
+  std_length: float
+  max_length: int
+  current_length: int
+  wait_count: int
+  average_wait: float
+  max_wait: float
+```
+
+对应默认报告的 `WAIT FILE STATISTICS`。
+
 ### RunResult
 
 ```text
@@ -710,8 +750,45 @@ RunResult
   queues: list[QueueStat]
   services: list[ServiceStat]
   resources: list[ResourceStat]
+  awaits: list[AwaitStat]
   continuous: ContinuousHistory | None
   debug_path: str | None
+  seed: int | None
+  start: float
+  end: float | None
+  clear_time: float | None
+  rng_mode: str
+  retain_samples: bool
+  model_hash: str
+  initial: dict[str, float]
+  constants: dict[str, float]
+  entities: dict[str, int]
+  entity_data: dict[str, list[dict[str, float]]]
+  continuous_options: dict
+  max_events: int | None
+  max_same_time_events: int | None
+```
+
+`manifest()` 返回可写入 JSON 的复现摘要；`write_manifest(path)` 写出文件。
+
+### ReplicaResult
+
+```text
+ReplicaResult
+  results: list[RunResult]
+  seeds: list[int]
+  confidence: float
+
+  observations() -> dict[label, ReplicaMetric]
+  queues() / services() / resources() / awaits()
+  manifest() / write_manifest(path)
+  report(path)
+```
+
+`ReplicaMetric`：
+
+```text
+label / mean / half_width / runs / minimum / maximum
 ```
 
 ---

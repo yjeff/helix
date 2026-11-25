@@ -1,0 +1,78 @@
+HELIX 1
+
+PROJECT "PORT OPERATIONS"
+
+; 油轮类型、装载时间、到港时刻
+VAR id ENTITY
+VAR load_time ENTITY
+VAR last_time ENTITY
+VAR pob GLOBAL
+
+RESOURCE berth(capacity=3)
+RESOURCE tug(capacity=1)
+
+NETWORK
+  ; 既有油轮交通：类型 1/2/3
+  CREATE(interval=UNFRM(4.0, 18.0))
+  ASSIGN(pob=UNFRM(0, 1))
+
+  IF pob <= 0.25 -> arv1
+  ELSE IF pob <= 0.80 -> arv2
+  ELSE -> arv3
+
+arv1: ASSIGN(load_time=UNFRM(16.0, 20.0), id=1) -> port
+arv2: ASSIGN(load_time=UNFRM(21.0, 27.0), id=2) -> port
+arv3: ASSIGN(load_time=UNFRM(32.0, 40.0), id=3) -> port
+
+  ; 新增的 5 艘 type 4 油轮
+  CREATE(interval=48, first=0, count=5) -> arv4
+
+arv4: ASSIGN(load_time=UNFRM(18.0, 24.0), id=4) -> port
+
+  ; 港口作业
+port: ASSIGN(last_time=TNOW)
+
+  BERTH_WAIT: AWAIT(resource=berth, priority=0)
+  TUG_BERTH: AWAIT(resource=tug, priority=2)
+
+  ACTIVITY(duration=1.0)
+  FREE(resource=tug)
+
+  ACTIVITY(duration=load_time, servers=3)
+
+  TUG_DEBERTH: AWAIT(resource=tug, priority=1)
+  ACTIVITY(duration=1)
+  FREE(berth)
+  FREE(tug)
+
+  IF id = 1 -> dpt1
+  ELSE IF id = 2 -> dpt2
+  ELSE IF id = 3 -> dpt3
+  ELSE -> dpt4
+
+dpt1: OBSERVE("T1 IN PORT TIME", TNOW - last_time)
+      ASSIGN(last_time=TNOW)
+      EXIT()
+
+dpt2: OBSERVE("T2 IN PORT TIME", TNOW - last_time)
+      ASSIGN(last_time=TNOW)
+      EXIT()
+
+dpt3: OBSERVE("T3 IN PORT TIME", TNOW - last_time)
+      ASSIGN(last_time=TNOW)
+      EXIT()
+
+dpt4: OBSERVE("T4 IN PORT TIME", TNOW - last_time)
+      ASSIGN(last_time=TNOW)
+      ACTIVITY(duration=UNFRM(216.0, 264.0), servers=5) -> arv4
+
+  ; 风暴：关闭拖轮，持续一段时间后恢复
+  CREATE(count=1) -> STORM_WAIT
+
+STORM_WAIT: ACTIVITY(duration=EXPON(48.0)) -> STORM
+
+STORM: ALTER(resource=tug, capacity=0)
+       ACTIVITY(duration=UNFRM(2.0, 6.0))
+       ALTER(resource=tug, capacity=1)
+       ACTIVITY(duration=EXPON(48.0)) -> STORM_WAIT
+END

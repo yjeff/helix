@@ -18,6 +18,7 @@ from .model import Model, NodeSpec
 from .parser import parse
 from .scenario import Scenario
 from .runtime.state import RunResult
+from .replicas import ReplicaResult
 
 __version__ = "0.1.0"
 
@@ -26,6 +27,7 @@ __all__ = [
     "NodeSpec",
     "Scenario",
     "RunResult",
+    "ReplicaResult",
     "parse",
     "HelixError",
     "HelixSyntaxError",

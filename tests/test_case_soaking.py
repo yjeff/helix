@@ -20,7 +20,7 @@ class SoakingCaseTest(unittest.TestCase):
             "TEMP": [0.0] * 10,
             "ACTIVE": [0.0] * 10,
             "C": [0.15] * 10,
-        }).run(end=500.0, seed=4)
+        }).run(end=500.0, seed=4, rng_mode="global")
 
         final = result.continuous_final
         # 旧版 seed=0: FURNACE≈2514.6, MAX_TEMP≈2133, ACTIVE=9。
