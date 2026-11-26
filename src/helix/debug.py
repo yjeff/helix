@@ -107,9 +107,10 @@ class DebugRecorder:
                 {
                     "label": node.label,
                     "kind": node.kind,
-                    "args": node.args,
-                    "outgoing": node.outgoing,
-                    "branches": node.branches,
+                    "args": dict(node.args),
+                    "outgoing": list(node.outgoing),
+                    "branches": [list(item) for item in node.branches],
+                    "paths": [list(item) for item in node.paths],
                 }
                 for node in model.nodes.values()
             ],

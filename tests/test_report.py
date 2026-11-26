@@ -47,7 +47,7 @@ END
             self.assertIn("## QUEUE STATISTICS", text)
             self.assertIn("AVG LENGTH", text)
             self.assertIn("## SERVICE ACTIVITY STATISTICS", text)
-            self.assertIn("AVG UTIL.", text)
+            self.assertIn("AVG SVC UTIL.", text)
             self.assertIn("SERVERS", text)
             self.assertIn("## ABBREVIATIONS", text)
             lines = text.splitlines()
@@ -115,6 +115,32 @@ END
             svg = out / "report.svg"
             self.assertTrue(svg.exists())
             self.assertIn("<polyline", svg.read_text(encoding="utf-8"))
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+
+
+    def test_activity_and_resource_labels_are_distinct(self):
+        result = helix.Model.from_source("""
+HELIX 1
+RESOURCE R(2)
+NETWORK
+  CREATE(count=1)
+  AWAIT(R)
+  ACTIVITY(duration=1)
+  FREE(R)
+  EXIT()
+END
+""").initialize().run(end=3, seed=1)
+        out = ROOT / "tests" / "_labels_tmp"
+        shutil.rmtree(out, ignore_errors=True)
+        try:
+            path = out / "report.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            result.report(str(path))
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("AVG SVC UTIL.", text)
+            self.assertIn("AVG OCCUPANCY", text)
+            self.assertNotIn("AVG UTIL.", text)
         finally:
             shutil.rmtree(out, ignore_errors=True)
 

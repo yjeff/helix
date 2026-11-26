@@ -548,6 +548,7 @@ CREATE(
 
 ```text
 属性名必须是已声明的 ENTITY 变量
+属性名大小写不敏感；运行时统一使用声明的规范名
 属性值必须是列表
 count 必须等于列表长度
 省略 count 时由列表长度推断
@@ -891,6 +892,9 @@ E: EVENT(code=2)
 M: MATCH(natr=1, queues=[Q1, Q2], save=false)
 ```
 
+当前未实现。`helix check` 会在编译期报告不支持的节点类型，
+不会等到实体运行到该节点才失败。
+
 `natr` 等内部 ATRIB 接口待定。
 
 ---
@@ -1095,7 +1099,8 @@ QUEUE.Q1.LENGTH
 ACTIVITY.A1.UTIL
 ACTIVITY.A1.BLOCK
 RESOURCE.R.UTIL
-GATE.WAIT
+GATE.LIGHT1.WAIT
+GATE.LIGHT1.MAX_WAIT
 BALK
 ```
 

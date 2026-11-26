@@ -30,6 +30,7 @@ docs/language-reference.md 完整语法/案例对比
 docs/semantics.md        Helix 语义规范
 docs/known-differences.md 已知差异与不再排查项
 docs/design.md           实现架构
+docs/reading-guide.md    源码阅读指南
 docs/data-structures.md  数据结构
 docs/metrics.md          自动统计指标命名
 docs/Helix_User_Manual.docx  用户手册（GitHub）

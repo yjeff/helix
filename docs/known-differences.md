@@ -158,7 +158,7 @@ Repair 0%
 ## 4. 当前实现限制
 
 ```text
-MATCH 尚未实现
+MATCH 尚未实现；check 编译期会报告不支持的节点类型
 数组只支持 GLOBAL
 PIT/HOLD 等服务台数必须显式配置
 ```

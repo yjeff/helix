@@ -114,6 +114,7 @@ class Scenario:
         """
         from .kernel import Kernel
 
+        self.model.check_integrity()
         return Kernel(
             scenario=self,
             start=float(start),

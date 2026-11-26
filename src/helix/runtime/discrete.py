@@ -294,6 +294,10 @@ class DiscreteRuntime:
                 await_state.wait_enter[entity_id] = now
         for gate in self.gates.values():
             gate.wait_count = 0
+            gate.wait_sum = 0.0
+            gate.wait_max = 0.0
+            for entity_id in gate.waiters:
+                gate.wait_enter[entity_id] = now
 
     def advance(self, target: float, start: float | None = None) -> None:
         """推进队列/活动/服务台的时间加权统计。
@@ -907,6 +911,16 @@ class DiscreteRuntime:
         self._assign_args(node.args, entity, node.label, context)
         self._route(entity, node.outgoing[0] if node.outgoing else None)
 
+    def _variable_spec(self, name: str):
+        spec = self.model.variables.get(name)
+        if spec is not None:
+            return spec
+        lower = name.lower()
+        for candidate, candidate_spec in self.model.variables.items():
+            if candidate.lower() == lower:
+                return candidate_spec
+        return None
+
     def _assign_args(self, args: dict[str, str], entity: Entity,
                      label: str,
                      context: dict[str, float] | None = None) -> None:
@@ -924,10 +938,11 @@ class DiscreteRuntime:
             target = name
             if "[" in target and target.endswith("]"):
                 base, index_text = target[:-1].split("[", 1)
-                spec = self.model.variables.get(base)
+                spec = self._variable_spec(base)
                 if spec is None or not spec.size:
                     raise HelixRuntimeError(
                         f"{label}: 未声明数组: {base}")
+                base = spec.name
                 index = int(Expression(
                     index_text, label=f"{label}:{base}").evaluate(
                         context))
@@ -937,7 +952,9 @@ class DiscreteRuntime:
                 target = f"{base}[{index}]"
                 spec = self.model.variables[base]
             else:
-                spec = self.model.variables.get(target)
+                spec = self._variable_spec(target)
+                if spec is not None:
+                    target = spec.name
             if spec is None:
                 raise HelixRuntimeError(
                     f"{label}: 未声明变量: {name}")
@@ -949,6 +966,8 @@ class DiscreteRuntime:
             else:
                 entity.attrs[target] = value
             context[target] = value
+            context[target.lower()] = value
+            context[target.upper()] = value
 
     # ------------------------------------------------------------------
     # OBSERVE
@@ -1053,6 +1072,12 @@ class DiscreteRuntime:
             context[f"RESOURCE.{name}.CAPACITY"] = float(resource.capacity)
             context[f"RESOURCE.{name}.HELD"] = float(held)
             context[f"RESOURCE.{name}.AVAILABLE"] = float(resource.available)
+        # Attribute names are canonicalized by CREATE/ASSIGN, but expressions
+        # historically accepted either `tag` or `TAG`. Keep one lookup rule.
+        for name, value in list(context.items()):
+            if isinstance(name, str):
+                context.setdefault(name.lower(), value)
+                context.setdefault(name.upper(), value)
         return context
 
     # ------------------------------------------------------------------
@@ -1103,6 +1128,7 @@ class DiscreteRuntime:
                 entity.wait_seq = self._next_wait_seq()
                 gate.waiters.append(entity.id)
                 gate.wait_count += 1
+                gate.wait_enter[entity.id] = self.kernel.now
             return
 
         resource_name = node.args.get("resource")
@@ -1450,6 +1476,10 @@ class DiscreteRuntime:
             key=lambda ent: (-ent.priority, ent.wait_seq))
         gate.waiters.clear()
         for entity in ordered:
+            entered = gate.wait_enter.pop(entity.id, self.kernel.now)
+            wait = max(0.0, self.kernel.now - entered)
+            gate.wait_sum += wait
+            gate.wait_max = max(gate.wait_max, wait)
             await_node = self.model.node(entity.current_node)
             self._route(entity,
                         await_node.outgoing[0] if await_node.outgoing else None)
@@ -1962,6 +1992,9 @@ class DiscreteRuntime:
                 name=gate.name,
                 state=gate.state,
                 wait_count=gate.wait_count,
+                average_wait=(gate.wait_sum / gate.wait_count
+                              if gate.wait_count else 0.0),
+                max_wait=gate.wait_max,
             )
             for gate in self.gates.values()
         ]

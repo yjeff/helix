@@ -355,6 +355,9 @@ class GateState:
     state: str = "CLOSED"
     waiters: list[int] = field(default_factory=list)
     wait_count: int = 0
+    wait_sum: float = 0.0
+    wait_max: float = 0.0
+    wait_enter: dict[int, float] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -392,6 +395,8 @@ class GateStat:
     name: str
     state: str
     wait_count: int
+    average_wait: float = 0.0
+    max_wait: float = 0.0
 
 
 @dataclass(slots=True)
@@ -510,6 +515,7 @@ class RunResult:
         - ``QUEUE.Q1.WAIT`` / ``QUEUE.Q1.LENGTH``
         - ``ACTIVITY.INSPECT.UTIL`` / ``ACTIVITY.INSPECT.BLOCK``
         - ``RESOURCE.R.UTIL`` / ``RESOURCE.R.WAIT``
+        - ``GATE.LIGHT1.WAIT`` / ``GATE.LIGHT1.MAX_WAIT``
         - ``VAR.TEMP`` / ``VAR.TEMP.MEAN``
 
         为兼容旧脚本，也接受 ``Q1.WAIT``、``A1.UTIL`` 这类简写。
@@ -536,6 +542,15 @@ class RunResult:
                 return observation.maximum
             raise ValueError(f"未知 SYSTEM.TIME 指标: {name}")
 
+        # 单 GATE 的旧式简写；多 GATE 时必须写 GATE.<name>.WAIT。
+        if upper in ("GATE.WAIT", "GATE.MAX_WAIT"):
+            if len(self.gates) != 1:
+                raise ValueError(
+                    "GATE.WAIT 只适用于单个 GATE；"
+                    "请使用 GATE.<name>.WAIT")
+            metric = upper.split(".", 1)[1]
+            return self._gate_metric(self.gates[0].name, metric)
+
         parts = text.split(".")
         if len(parts) == 2 and parts[0].upper() == "VAR":
             return self._var_metric(parts[1], "", text)
@@ -549,6 +564,8 @@ class RunResult:
                 return self._activity_metric(owner, metric)
             if namespace == "RESOURCE":
                 return self._resource_metric(owner, metric)
+            if namespace == "GATE":
+                return self._gate_metric(owner, metric)
             if namespace == "VAR" and len(parts) >= 3:
                 return self._var_metric(parts[1], parts[2], name)
 
@@ -618,6 +635,17 @@ class RunResult:
                     "CURRENT": float(resource.current_held),
                     "AVAILABLE": float(resource.available),
                     "WAIT": float(resource.wait_count),
+                }.get(metric, math.nan)
+        return math.nan
+
+    def _gate_metric(self, owner: str, metric: str) -> float:
+        for gate in self.gates:
+            if gate.name == owner:
+                return {
+                    "WAIT": gate.average_wait,
+                    "MAX_WAIT": gate.max_wait,
+                    "WAIT_COUNT": float(gate.wait_count),
+                    "COUNT": float(gate.wait_count),
                 }.get(metric, math.nan)
         return math.nan
 
@@ -752,9 +780,10 @@ class RunResult:
                 lines += [
                     "## SERVICE ACTIVITY STATISTICS",
                     "",
-                    "| ACTIVITY | SERVERS | AVG UTIL. | STD. UTIL. | "
-                    "MAX UTIL. | CUR. UTIL. | AVG BLOCK. | "
-                    "MAX IDLE | MAX BUSY | COMPLETED |",
+                    "| ACTIVITY | SERVERS | AVG SVC UTIL. | "
+                    "STD SVC UTIL. | MAX SVC UTIL. | CUR SVC UTIL. | "
+                    "AVG BLOCK. | MAX IDLE TIME | MAX BUSY PERIOD | "
+                    "COMPLETED |",
                     "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
                 ]
                 for service in self.services:
@@ -776,8 +805,8 @@ class RunResult:
                 lines += [
                     "## RESOURCE STATISTICS",
                     "",
-                    "| RESOURCE | CAPACITY | AVAILABLE | AVG UTIL. | "
-                    "STD. UTIL. | MAX UTIL. | CUR. UTIL. | "
+                    "| RESOURCE | CAPACITY | AVAILABLE | AVG OCCUPANCY | "
+                    "STD OCCUPANCY | MAX OCCUPANCY | CUR OCCUPANCY | "
                     "AVG HELD | MAX HELD | CURRENT | WAIT COUNT |",
                     "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
                 ]
@@ -799,13 +828,14 @@ class RunResult:
                 lines += [
                     "## GATE STATISTICS",
                     "",
-                    "| GATE | STATE | WAIT COUNT |",
-                    "|---|---|---:|",
+                    "| GATE | STATE | WAIT COUNT | AVG WAIT | MAX WAIT |",
+                    "|---|---|---:|---:|---:|",
                 ]
                 for gate in self.gates:
                     lines.append(
                         f"| {gate.name} | {gate.state} | "
-                        f"{gate.wait_count} |")
+                        f"{gate.wait_count} | {gate.average_wait:.4f} | "
+                        f"{gate.max_wait:.4f} |")
                 lines.append("")
 
             lines += [
@@ -824,15 +854,20 @@ class RunResult:
                 "| CURRENT | CURRENT LENGTH / CURRENT HELD |",
                 "| BALK | BALK COUNT |",
                 "| AVG WAIT | AVERAGE WAIT |",
+                "| MAX WAIT | MAXIMUM WAIT |",
                 "| SERVERS | SERVER CAPACITY |",
-                "| AVG UTIL. | AVERAGE UTILIZATION |",
-                "| STD. UTIL. | STANDARD DEVIATION OF UTILIZATION |",
-                "| MAX UTIL. | MAXIMUM UTILIZATION |",
-                "| CUR. UTIL. | CURRENT UTILIZATION |",
+                "| AVG SVC UTIL. | AVERAGE SERVICE UTILIZATION |",
+                "| STD SVC UTIL. | STD. DEV. OF SERVICE UTILIZATION |",
+                "| MAX SVC UTIL. | MAXIMUM SERVICE UTILIZATION |",
+                "| CUR SVC UTIL. | CURRENT SERVICE UTILIZATION |",
                 "| AVG BLOCK. | AVERAGE BLOCKAGE |",
-                "| MAX IDLE | MAXIMUM IDLE TIME / SERVER |",
-                "| MAX BUSY | MAXIMUM BUSY TIME / SERVER |",
+                "| MAX IDLE TIME | MAXIMUM IDLE TIME / SERVER |",
+                "| MAX BUSY PERIOD | MAXIMUM CONTINUOUS BUSY PERIOD / SERVER |",
                 "| COMPLETED | TRANS. COUNT |",
+                "| AVG OCCUPANCY | AVERAGE HELD / CAPACITY |",
+                "| STD OCCUPANCY | STD. DEV. OF HELD / CAPACITY |",
+                "| MAX OCCUPANCY | MAXIMUM HELD / CAPACITY |",
+                "| CUR OCCUPANCY | CURRENT HELD / CAPACITY |",
                 "| AVG HELD | AVERAGE HELD |",
                 "| MAX HELD | MAXIMUM HELD |",
                 "| AVAILABLE | REMAINING CAPACITY |",

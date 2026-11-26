@@ -135,9 +135,23 @@ Model
   order: list[str]
   edges: list[EdgeSpec]
   source_hash: str
+  _frozen: bool
+  _fingerprint: str
 ```
 
 `Model` 只读；`initialize` 创建 `Scenario`。
+
+编译完成后自动调用：
+
+```text
+Model.freeze()
+Model.structure_fingerprint()
+Model.check_integrity()
+```
+
+`freeze()` 把节点参数、边、变量表等转换为只读结构。
+`check_integrity()` 在每次运行前比较结构指纹；如果 Model 被外部修改，
+会发出 `RuntimeWarning`。
 
 ### NodeSpec
 
@@ -587,10 +601,22 @@ AwaitState
 GateState
   name: str
   state: OPEN | CLOSED
-  waiters: list[Entity]
-
+  waiters: list[entity_id]
   wait_count: int
-  area: float
+  wait_sum: float
+  wait_max: float
+  wait_enter: dict[entity_id, float]
+```
+
+`wait_enter` 记录实体进入 GATE 等待的时刻；GATE 打开时计算并累计等待时长。
+
+```text
+GateStat
+  name: str
+  state: OPEN | CLOSED
+  wait_count: int
+  average_wait: float
+  max_wait: float
 ```
 
 ### SelectState

@@ -11,9 +11,12 @@ Compiler 的职责：
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 
 from .ast import (
     AttrDecl,
@@ -32,6 +35,32 @@ from .ast import (
 )
 from .errors import HelixCompileError
 from .parser import _split_top_level, parse
+
+
+SUPPORTED_NODE_KINDS = frozenset({
+    "CREATE",
+    "QUEUE",
+    "ACTIVITY",
+    "ASSIGN",
+    "EVENT",
+    "OBSERVE",
+    "SCAN",
+    "IF",
+    "PARALLEL",
+    "SPLIT",
+    "FORK",
+    "JOIN",
+    "MERGE",
+    "SELECT",
+    "AWAIT",
+    "FREE",
+    "ALTER",
+    "PREEMPT",
+    "OPEN",
+    "CLOSE",
+    "TERMINATE",
+    "DETECT",
+})
 
 
 @dataclass(slots=True)
@@ -101,6 +130,13 @@ class NodeSpec:
     branches: list[tuple[str, str]] = field(default_factory=list)
     line: int = 0
     paths: list[tuple[str | None, str]] = field(default_factory=list)
+    _frozen: bool = field(default=False, repr=False)
+
+    def __setattr__(self, name: str, value) -> None:
+        if getattr(self, "_frozen", False) and name != "_frozen":
+            raise AttributeError(
+                f"NodeSpec {self.label!r} 已冻结，不能修改 {name}")
+        object.__setattr__(self, name, value)
 
 
 @dataclass(slots=True)
@@ -119,6 +155,8 @@ class Model:
     order: list[str] = field(default_factory=list)
     edges: list[EdgeSpec] = field(default_factory=list)
     source_hash: str = ""
+    _frozen: bool = field(default=False, repr=False)
+    _fingerprint: str = field(default="", repr=False)
 
     # ------------------------------------------------------------------
     # 构造
@@ -152,6 +190,88 @@ class Model:
         text = Path(path).read_text(encoding="utf-8")
         return cls.from_source(text, debug_parse=debug_parse,
                                debug_path=debug_path, source_name=str(path))
+
+    def freeze(self) -> None:
+        """冻结编译后的 Model IR。
+
+        运行时只能读取 Model；ALTER 等动态值必须写入 RuntimeState。
+        冻结后修改 ``nodes[...]``、``args``、outgoing/branches/paths
+        会立即抛出 TypeError/AttributeError。
+        """
+        if self._frozen:
+            return
+        for node in self.nodes.values():
+            if not isinstance(node.args, MappingProxyType):
+                node.args = MappingProxyType(dict(node.args))
+            if not isinstance(node.outgoing, tuple):
+                node.outgoing = tuple(node.outgoing)
+            if not isinstance(node.branches, tuple):
+                node.branches = tuple(node.branches)
+            if not isinstance(node.paths, tuple):
+                node.paths = tuple(node.paths)
+            node._frozen = True
+        self.variables = MappingProxyType(dict(self.variables))
+        self.attrs = MappingProxyType(dict(self.attrs))
+        self.resources = MappingProxyType(dict(self.resources))
+        self.gates = MappingProxyType(dict(self.gates))
+        self.nodes = MappingProxyType(dict(self.nodes))
+        self.detects = tuple(self.detects)
+        self.sevnts = tuple(self.sevnts)
+        self.equations = tuple(self.equations)
+        self.order = tuple(self.order)
+        self.edges = tuple(self.edges)
+        self._frozen = True
+        self._fingerprint = self.structure_fingerprint()
+
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
+
+    def structure_fingerprint(self) -> str:
+        """计算 Model IR 的结构指纹，用于发现运行期误写。"""
+        payload = {
+            "project": self.project,
+            "version": self.version,
+            "source_hash": self.source_hash,
+            "variables": {
+                name: [spec.scope, spec.size, spec.default, spec.label]
+                for name, spec in self.variables.items()
+            },
+            "resources": {
+                name: [spec.capacity, spec.mode]
+                for name, spec in self.resources.items()
+            },
+            "gates": {
+                name: spec.state for name, spec in self.gates.items()
+            },
+            "nodes": {
+                label: {
+                    "kind": node.kind,
+                    "args": dict(node.args),
+                    "outgoing": list(node.outgoing),
+                    "branches": list(node.branches),
+                    "paths": list(node.paths),
+                }
+                for label, node in self.nodes.items()
+            },
+            "order": list(self.order),
+            "edges": [[edge.source, edge.target, edge.kind]
+                      for edge in self.edges],
+        }
+        raw = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, default=str)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def check_integrity(self) -> None:
+        """在每次运行前检查冻结后的 Model 是否被外部修改。"""
+        if self._frozen and self._fingerprint:
+            if self.structure_fingerprint() != self._fingerprint:
+                warnings.warn(
+                    "Model 在 freeze() 后被修改；运行结果可能不可复现。"
+                    " 请把动态修改放入 Scenario/Runtime。",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
 
     # ------------------------------------------------------------------
     # 场景
@@ -196,6 +316,11 @@ class Model:
         """检查模型级不变量；错误信息面向用户。"""
         errors: list[str] = []
         for node in self.nodes.values():
+            if node.kind not in SUPPORTED_NODE_KINDS:
+                line = f"（第 {node.line} 行）" if node.line else ""
+                errors.append(
+                    f"{node.label}: 不支持的节点类型 {node.kind}{line}")
+                continue
             for target in node.outgoing:
                 if target not in self.nodes:
                     errors.append(
@@ -642,6 +767,7 @@ def compile_program(program: Program, *, source_text: str = "") -> Model:
     _compile_network(model, program.network)
     _resolve_variable_scopes(model)
     model.validate()
+    model.freeze()
     return model
 
 

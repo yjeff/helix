@@ -94,7 +94,7 @@ Helix 报告：
 
 ```text
 berth AVG HELD = 2.8352
-berth AVG UTIL. = 0.9451
+berth AVG OCCUPANCY = 0.9451
 ```
 
 书中 `AVERAGE UTILIZATION = 2.8285` 是平均占用泊位数，不是比例。  

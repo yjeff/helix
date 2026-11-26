@@ -38,17 +38,17 @@ Parser
   ↓
 AST
   ↓
-Compiler
+Compiler (model.py)
   ↓
-Model IR
+Model IR (frozen)
   ↓
 Scenario
   ↓
 Kernel
-  ├── DiscreteRuntime
-  ├── ContinuousRuntime
-  ├── Statistics
-  └── DebugRecorder
+  ├── DiscreteRuntime (runtime/discrete.py)
+  ├── ContinuousSource (continuous/source.py)
+  ├── Statistics / RunResult (runtime/state.py)
+  └── DebugRecorder (debug.py)
   ↓
 RunResult
   ↓
@@ -57,74 +57,91 @@ Report / Animation
 
 职责：
 
-| 层 | 职责 |
-|---|---|
-| Lexer | 字符 → Token |
-| Parser | Token → AST |
-| Compiler | AST → Model IR、名字解析、静态校验 |
-| Scenario | 初值、常量、初始实体 |
-| Kernel | FEL/CEL、时间推进、事件调度 |
-| DiscreteRuntime | CREATE/QUEUE/ACTIVITY/资源等处理器 |
-| ContinuousRuntime | DD/SS、RK4、DETECT |
-| Statistics | 自动统计 |
-| DebugRecorder | 结构化 DEBUG |
-| Report | track/plot/输出 |
+| 层 | 当前实现 | 职责 |
+|---|---|---|
+| Lexer | `lexer.py` | 字符 → Token |
+| Parser | `parser.py` | Token → AST |
+| Compiler | `model.py` 的 `compile_program()` | AST → Model IR、名字解析、静态校验、freeze |
+| Scenario | `scenario.py` | 初值、常量、初始实体 |
+| Kernel | `kernel.py` | FEL/CEL、时间推进、事件调度 |
+| DiscreteRuntime | `runtime/discrete.py` | CREATE/QUEUE/ACTIVITY/资源等全部离散节点处理器 |
+| ContinuousSource | `continuous/source.py` | DD/SS 推进、DETECT/SEVNT |
+| Statistics | `runtime/state.py` | 自动统计、`RunResult` |
+| DebugRecorder | `debug.py` | 结构化 DEBUG |
+| Report | `runtime/state.py` 的 `RunResult.report()` | track/plot/输出 |
 
-Kernel 不知道：
-
-```text
-QUEUE 是什么
-RK4 是什么
-实体属性是什么
-```
-
-Kernel 只知道：
-
-```text
-时间
-事件
-TimeSource
-事件处理器
-```
+`kernel.py` 会构造 `DiscreteRuntime`，但不在 Kernel 内按节点类型分支；
+节点语义仍由 `DiscreteRuntime._route_node()` 分派。连续模型由
+`ContinuousSource` 提供时间推进，Kernel 只处理事件和时钟。
 
 ---
 
-## 3. 模块建议
+## 3. 当前模块布局
+
+以下目录与 `src/helix/` 的实际文件一致：
 
 ```text
 src/helix/
   __init__.py
+  __main__.py
   errors.py
   tokens.py
   lexer.py
   ast.py
   parser.py
-  compiler.py
-  model.py
+  model.py              # AST -> Model IR、validate、freeze
   scenario.py
-  kernel.py
+  kernel.py             # FEL/CEL 和事件调度
   events.py
-  time_source.py
+  replicas.py
+  debug.py
+  animate.py
+  cli.py
   runtime/
     __init__.py
-    discrete.py
-    queues.py
-    activities.py
-    resources.py
-    gates.py
-    select.py
-    branching.py
+    discrete.py         # 所有离散节点处理器
+    state.py            # 运行时状态、Stat、RunResult、report
   continuous/
     __init__.py
-    integrator.py
-    equations.py
-    detect.py
-  stats.py
-  debug.py
-  report.py
+    expressions.py
+    equations.py        # RK4/RKF45
+    source.py           # ContinuousSource、DETECT/SEVNT
 ```
 
-`kernel.py` 不导入 `runtime/discrete.py` 的内部类，只依赖处理器注册表。
+职责说明：
+
+```text
+model.py
+  compile_program / validate / freeze
+  没有独立的 compiler.py
+
+runtime/discrete.py
+  CREATE / QUEUE / ACTIVITY / AWAIT / FREE / ALTER / ...
+  没有 queues.py / activities.py / resources.py / gates.py /
+  select.py / branching.py 这些拆分文件
+
+runtime/state.py
+  QueueState / ActivityState / ResourceState / GateState
+  QueueStat / ServiceStat / ResourceStat / GateStat
+  RunResult / report
+  没有独立的 stats.py 或 report.py
+
+continuous/
+  source.py 包含连续推进和 DETECT/SEVNT
+  equations.py 包含积分器
+  没有 integrator.py 或 detect.py
+
+kernel.py
+  Kernel + FEL/CEL
+  没有独立的 time_source.py
+```
+
+早期设计曾计划拆分 `compiler.py`、`stats.py`、`report.py`、
+`time_source.py` 以及更细的 runtime/continuous 模块，但没有落地。
+这些文件不应出现在导入路径或新文档中。
+
+如果未来进行模块拆分，必须同步更新本节和
+`docs/reading-guide.md` 的源码入口表。
 
 ---
 
@@ -133,10 +150,10 @@ src/helix/
 ```text
 Model.from_file(path)
   → read_text
-  → lex
-  → parse
-  → compile
+  → parse (lexer + parser)
+  → compile_program
   → validate
+  → freeze
   → Model
 ```
 
@@ -163,6 +180,9 @@ SELECT queues/servers 存在
 不初始化变量
 ```
 
+编译完成后 `Model.freeze()` 把节点参数、边、变量表转为只读结构；
+运行期修改会直接报错或通过结构指纹发出警告。
+
 ---
 
 ## 5. 场景初始化
@@ -180,14 +200,13 @@ scenario = model.initialize(
 `initialize`：
 
 ```text
-深拷贝 Model
-解析 initial 标签
-校验 constants
-生成初始实体
-保存运行前状态
+持有已冻结 Model 的只读引用
+规范化并复制 initial / constants / entities
+校验 initial 标签和数组初值
+创建 Scenario
 ```
 
-不修改 `model`。
+不修改 `model`；Model 在 `Scenario` 创建前已经 `freeze()`。
 
 多次运行：
 

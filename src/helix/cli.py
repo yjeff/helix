@@ -195,8 +195,9 @@ def _replica_sections(results) -> list[tuple[str, list[str], list[list[str]]]]:
         rows.append([name, f"{mean:.4f}", f"±{half:.4f}",
                      f"{done_mean:.1f}", f"±{done_half:.1f}"])
     if rows:
-        sections.append(("ACTIVITIES", ["ACTIVITY", "AVG UTIL.", "HALF-WIDTH",
-                                        "COMPLETED", "HALF-WIDTH"], rows))
+        sections.append(("ACTIVITIES", ["ACTIVITY", "AVG SVC UTIL.",
+                                        "HALF-WIDTH", "COMPLETED",
+                                        "HALF-WIDTH"], rows))
 
     rows = []
     for name in sorted({x.name for result in results
